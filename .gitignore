@@ -34,3 +34,6 @@ Packages/
 # This project
 /out/
 /dist/
+
+# Local test books (often copyrighted): never commit
+/TestCorpus/

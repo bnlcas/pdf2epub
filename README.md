@@ -1,23 +1,54 @@
 # pdf2epub
 
-Turns PDF books and articles, born-digital or scanned, into clean, reflowable EPUBs for small
-e-ink readers. It's one native macOS binary with no Homebrew, Python, or model downloads, and
-it runs in Finder as a right-click Quick Action.
+Convert PDFs into clean reflowable EPUBs on macOS.
+Built with Apple's PDFKit, Vision and Foundation Models to scan, format and clean up PDFs and turn them into EPUB files. Works on scans and transcriptions.
 
-It uses only Apple frameworks: PDFKit and CoreGraphics to read PDFs, Vision for OCR, and
-Foundation Models for an optional on-device proofreading pass.
+Just want to convert some books? Follow the [Quick start](#quick-start) below. No Terminal
+needed. Developers can [build from source](#build-from-source).
 
-**Requirements:** macOS 26 or later on Apple Silicon. Apple Intelligence is optional. Without
-it, the proofreading pass is skipped and everything else works the same.
+**Requirements:** macOS 26 or later on Apple Silicon. Apple Intelligence is optional. Apple's foundation model is used for a proofreading/formatting pass. Should run fine without this.
 
-## Install
+## Quick start
 
-**For readers:** download `PDF-to-EPUB-<version>.pkg` from the Releases page and
-double-click it. The installer puts `pdf2epub` in `/usr/local/bin` and adds the Quick Action.
-Then right-click any PDF in Finder and choose *Quick Actions → Convert to EPUB*.
+1. **Download** the latest `PDF-to-EPUB-<version>.pkg` from the
+   [Releases page](https://github.com/bnlcas/pdf2epub/releases/latest) (under *Assets*).
+2. **Install:** double-click the `.pkg` and click through the installer. It asks for your
+   Mac's password because it installs a small command-line tool for all users.
+3. **Turn on the Quick Action (first time only).** macOS adds new Quick Actions to Finder's
+   right-click menu, but sometimes leaves them switched off. To check:
+   - In Finder, right-click (or Control-click) any PDF and open the **Quick Actions** submenu.
+   - If **Convert to EPUB** is listed, you're done.
+   - If not, choose **Customize…** at the bottom of that submenu, tick **Convert to EPUB**
+     under Finder, and close System Settings. (The same list is in System Settings →
+     General → Login Items & Extensions → Extensions → Finder.)
+   <!-- TODO screenshot: Quick Actions → Customize… with "Convert to EPUB" ticked -->
+4. **Convert:** right-click a PDF → **Quick Actions → Convert to EPUB**. You can select
+   several PDFs at once. A notification appears when each book is done, and the `.epub` is
+   saved next to the original PDF.
+5. **Allow permissions on first use.** The first time you convert, macOS may ask whether to
+   allow access to the folder the PDF is in (Desktop, Documents, Downloads…) or to show
+   notifications. Click **Allow**, or the conversion can't read the PDF or tell you it
+   finished.
 
-To uninstall, delete `/usr/local/bin/pdf2epub`, `/Library/Application Support/PDF to EPUB`,
-and `~/Library/Services/Convert to EPUB.workflow`.
+Good to know:
+
+- Big scanned books can take a few minutes. Born-digital PDFs are usually quick.
+- The Quick Action only appears when PDFs are selected.
+- Quick Actions are a built-in macOS feature, so they also show up in Finder's preview pane
+  and in the *Services* menu.
+- The installer also adds the `pdf2epub` command for Terminal users. See [Usage](#usage) for
+  its options.
+- **Uninstall:** delete `/usr/local/bin/pdf2epub`, `/Library/Application Support/PDF to EPUB`,
+  and `~/Library/Services/Convert to EPUB.workflow`.
+
+## Build from source
+
+Requires Xcode (or its Command Line Tools) with the macOS 26 SDK. See
+[Development](#development) for tests and debugging.
+
+**Install for yourself:** `Scripts/install.sh` builds the tool, installs it to `~/bin`, and
+installs the Quick Action into `~/Library/Services`. Then enable the Quick Action as in step 3
+of the [Quick start](#quick-start).
 
 **Making a release:** `Scripts/release.sh` builds, signs (Developer ID, hardened runtime),
 packages, notarizes, and staples `dist/PDF-to-EPUB-<version>.pkg`. The version comes from
@@ -33,9 +64,6 @@ unzips it and double-clicks **Install.command**, then right-clicks a PDF and cho
 notification. The binary is signed ad hoc, not notarized, so if it was downloaded macOS
 blocks it the first time: open System Settings → Privacy & Security and click
 *Open Anyway*.
-
-**For development:** `Scripts/install.sh` builds the tool, installs it to `~/bin`, and
-installs the Quick Action into `~/Library/Services`.
 
 ## Usage
 
@@ -154,4 +182,4 @@ automatically.
   CSS on the device.
 
 ## Et Cetera:
-Claude Opus 5.5 made all of this. I take no credit beyond the initial desire. I take no responsibility for it either (MIT license). Hopefully this tool will be useful to you.
+Claude Opus 5.5 made all of this. I take no credit beyond the initial desire and some busy work to bundle it up. It's MIT license so I also take no legal responsibility. I found this to be a useful tool. Hopefully this tool will be useful to you.
