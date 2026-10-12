@@ -12,11 +12,27 @@ it, the proofreading pass is skipped and everything else works the same.
 
 ## Install
 
-**For readers:** run `Scripts/package.sh` and share `dist/PDF-to-EPUB.zip`. The person
+**For readers:** download `PDF-to-EPUB-<version>.pkg` from the Releases page and
+double-click it. The installer puts `pdf2epub` in `/usr/local/bin` and adds the Quick Action.
+Then right-click any PDF in Finder and choose *Quick Actions → Convert to EPUB*.
+
+To uninstall, delete `/usr/local/bin/pdf2epub`, `/Library/Application Support/PDF to EPUB`,
+and `~/Library/Services/Convert to EPUB.workflow`.
+
+**Making a release:** `Scripts/release.sh` builds, signs (Developer ID, hardened runtime),
+packages, notarizes, and staples `dist/PDF-to-EPUB-<version>.pkg`. The version comes from
+`pdf2epub --version`. One-time setup: create *Developer ID Application* and *Developer ID
+Installer* certificates (Xcode → Settings → Accounts → Manage Certificates), then store
+notarization credentials with
+`xcrun notarytool store-credentials pdf2epub-notary --apple-id <you> --team-id <TEAMID>`,
+using an app-specific password from appleid.apple.com.
+
+**Without a Developer ID:** run `Scripts/package.sh` and share `dist/PDF-to-EPUB.zip`. The person
 unzips it and double-clicks **Install.command**, then right-clicks a PDF and chooses
 *Quick Actions → Convert to EPUB*. The EPUB appears next to the PDF, followed by a
-notification. If macOS blocks the installer the first time, right-click it and choose
-*Open*. The binary is signed ad hoc, not notarized.
+notification. The binary is signed ad hoc, not notarized, so if it was downloaded macOS
+blocks it the first time: open System Settings → Privacy & Security and click
+*Open Anyway*.
 
 **For development:** `Scripts/install.sh` builds the tool, installs it to `~/bin`, and
 installs the Quick Action into `~/Library/Services`.
@@ -136,4 +152,6 @@ automatically.
   as short junk chapters.
 - Not yet tested on the X4 itself (spec §8.4). Tune the chapter size cap, image sizes, and
   CSS on the device.
-# pdf2epub
+
+## Et Cetera:
+Claude Opus 5.5 made all of this. I take no credit beyond the initial desire. I take no responsibility for it either (MIT license). Hopefully this tool will be useful to you.
