@@ -11,6 +11,8 @@ public struct PageLines: Sendable {
     public var figureRects: [CGRect] = []
     /// Lines removed as page furniture, kept for debugging output.
     public var furniture: [(Line, BlockKind)] = []
+    /// The text came from a scanner's hidden OCR layer: exact positions, but OCR mistakes.
+    public var hiddenLayer = false
 
     public init(index: Int, size: CGSize, source: TextSource, lines: [Line], figureRects: [CGRect] = []) {
         self.index = index
@@ -92,11 +94,15 @@ public enum MarginFilter {
         for (ci, c) in candidates.enumerated() {
             let line = pages[c.page].lines[c.line]
             let text = line.plainText
-            // Running heads are set no larger than the text; a big line up top is a chapter title.
-            if let body = bodySize[pages[c.page].source], line.fontSize > body * 1.12 { continue }
-            var kind: BlockKind? = nil
             let strictZone = line.bbox.maxY < topZone || line.bbox.minY > bottomZone
             let matchesFolio = trustedOffset.map { numbers(in: text).contains(pages[c.page].index + $0) } ?? false
+            // Running heads are set no larger than the text; a big line up top is a chapter
+            // title. (Folios can be a touch larger than the text, so a bare number at the foot
+            // of the page or in the folio sequence is still furniture.)
+            let bareNumber = isPageNumber(text)
+            if let body = bodySize[pages[c.page].source], line.fontSize > body * 1.12,
+               !(bareNumber && (!c.top || matchesFolio)) { continue }
+            var kind: BlockKind? = nil
             // Scans keep wide margins, so a folio can sit far from the page edge; but a bare
             // number that is the first or last thing on the page is still a folio.
             let isExtreme = c.extreme

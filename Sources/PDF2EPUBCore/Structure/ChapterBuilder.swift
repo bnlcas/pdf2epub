@@ -29,6 +29,12 @@ public enum ChapterBuilder {
             let end = n + 1 < sorted.count ? sorted[n + 1].index : blocks.count
             guard end > s.index else { continue }
             var chapterBlocks = Array(blocks[s.index..<end])
+            // Chapter titles set as display art aren't in any text layer; the printed contents
+            // supplies the words, so give the chapter a real heading.
+            if s.synthesizeHeading, let first = chapterBlocks.first,
+               !chapterBlocks.prefix(4).contains(where: { $0.kind.isHeading && matches($0.plainText, s.title) }) {
+                chapterBlocks.insert(Block(page: first.page, bbox: .zero, kind: .heading(1), text: s.title, source: first.source), at: 0)
+            }
             normalizeHeadings(&chapterBlocks, title: s.title)
             chapters.append(Chapter(title: s.title, navLevel: s.level, blocks: chapterBlocks))
         }
@@ -66,7 +72,7 @@ public enum ChapterBuilder {
         return chapters
     }
 
-    struct Split { var index: Int; var title: String; var level: Int }
+    struct Split { var index: Int; var title: String; var level: Int; var synthesizeHeading = false }
 
     // MARK: - Outline
 
@@ -86,7 +92,7 @@ public enum ChapterBuilder {
         for e in entries where e.level <= chosen {
             guard let idx = blockIndex(for: e, in: blocks), !used.contains(idx) else { continue }
             used.insert(idx)
-            splits.append(Split(index: idx, title: cleanTitle(e.title), level: e.level))
+            splits.append(Split(index: idx, title: cleanTitle(e.title), level: e.level, synthesizeHeading: e.fromPrintedContents))
         }
         return splits
     }

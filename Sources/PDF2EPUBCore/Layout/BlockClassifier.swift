@@ -47,6 +47,8 @@ public enum BlockClassifier {
                 blocks[i].kind = .heading(3)
             } else if b.isCentered && b.lines.count <= 2 && n >= 3 && isUppercase(plain) {
                 blocks[i].kind = .heading(2)
+            } else if b.lines.count == 1 && BlockBuilder.isShortCapsLine(b.lines[0]) && !isBareNumeral(plain) {
+                blocks[i].kind = .heading(3)
             } else if isBareNumeral(plain) && (b.isCentered || rel > 1.05) {
                 blocks[i].kind = .heading(2)
             } else if b.isCentered && b.lines.count == 1 && n < 70 && !TextMetrics.endsSentence(plain) {
@@ -72,6 +74,13 @@ public enum BlockClassifier {
             }
         }
 
+        // "Headings" with almost no letters are ornaments OCR'd as text ("5 «").
+        for i in blocks.indices where blocks[i].kind.isHeading {
+            let plain = blocks[i].plainText
+            if plain.filter(\.isLetter).count < 3 && !isBareNumeral(plain) && !isChapterHeading(plain) {
+                blocks[i].kind = .runningHeader
+            }
+        }
         mergeDropCaps(&blocks, context: context)
         mergeChapterTitles(&blocks)
         absorbShortVerse(&blocks)

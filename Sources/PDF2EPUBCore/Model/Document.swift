@@ -121,6 +121,10 @@ public struct Block: Codable, Sendable {
     public var noteID: Int?
     /// For body text: superscript marker → note number of the footnotes it references.
     public var noteRefs: [String: Int]?
+    /// For body text: superscript marker → id of the endnote it references (in a Notes chapter).
+    public var endnoteRefs: [String: String]?
+    /// For an endnote in a Notes chapter: its id, shared with the reference that cites it.
+    public var endnoteAnchor: String?
     public var source: TextSource
     /// Source lines, kept for heuristics. Not serialized into the EPUB.
     public var lines: [Line]
@@ -177,6 +181,16 @@ public struct OutlineEntry: Codable, Sendable {
     public var page: Int
     /// Normalized y of the destination (top-left origin), if known.
     public var y: Double?
+    /// Read from the book's printed contents page rather than the PDF's outline.
+    public var fromPrintedContents: Bool
+
+    public init(title: String, level: Int, page: Int, y: Double?, fromPrintedContents: Bool = false) {
+        self.title = title
+        self.level = level
+        self.page = page
+        self.y = y
+        self.fromPrintedContents = fromPrintedContents
+    }
 }
 
 public struct Metadata: Codable, Sendable {

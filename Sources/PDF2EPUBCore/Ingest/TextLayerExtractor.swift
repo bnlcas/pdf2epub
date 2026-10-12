@@ -132,6 +132,46 @@ public enum TextLayerExtractor {
                              imageRects: images, plainText: ns as String)
     }
 
+    /// Letter-spaced display type ("T R I B U T E", "A  S T U D Y  O F") reads as one letter
+    /// per word. Within a spaced word the gaps are even; a word break is clearly wider.
+    static func closeLetterSpacing(_ chars: [Char], scan: ContentScan) -> [Char] {
+        // Tokens: runs of non-space characters, with their painted extents.
+        struct Token { var range: Range<Int>; var minX: Double; var maxX: Double }
+        var tokens: [Token] = []
+        var i = 0
+        while i < chars.count {
+            if chars[i].ch.isWhitespace { i += 1; continue }
+            var j = i
+            var lo = Double.infinity, hi = -Double.infinity
+            while j < chars.count, !chars[j].ch.isWhitespace {
+                let box = chars[j].glyph.map { scan.glyphs[$0].box } ?? chars[j].rect
+                if !box.isNull { lo = min(lo, Double(box.minX)); hi = max(hi, Double(box.maxX)) }
+                j += 1
+            }
+            tokens.append(Token(range: i..<j, minX: lo, maxX: hi))
+            i = j
+        }
+        // Runs of single-character tokens (the letter-spaced stretch may be just the opening
+        // words of a paragraph: "I N  T H E  F I R S T chapter of this book").
+        var drop = Set<Int>()
+        var k = 0
+        while k < tokens.count {
+            guard tokens[k].range.count == 1 else { k += 1; continue }
+            var e = k
+            while e + 1 < tokens.count, tokens[e + 1].range.count == 1 { e += 1 }
+            let run = Array(tokens[k...e])
+            k = e + 1
+            guard run.count >= 3 else { continue }
+            let gaps = zip(run, run.dropFirst()).map { $1.minX - $0.maxX }.filter { $0.isFinite }
+            guard let median = TextMetrics.median(gaps), median > 0 else { continue }
+            // Drop spaces no wider than the letter spacing; wider ones are word breaks.
+            for (a, b) in zip(run, run.dropFirst()) where (b.minX - a.maxX) <= median * 1.5 {
+                for c in a.range.upperBound..<b.range.lowerBound { drop.insert(c) }
+            }
+        }
+        return chars.enumerated().filter { !drop.contains($0.offset) }.map(\.element)
+    }
+
     struct Style: Equatable {
         var italic = false
         var bold = false
@@ -143,6 +183,7 @@ public enum TextLayerExtractor {
         while trimmed.last?.ch.isWhitespace == true { trimmed.removeLast() }
         while trimmed.first?.ch.isWhitespace == true { trimmed.removeFirst() }
         guard !trimmed.isEmpty else { return nil }
+        trimmed = closeLetterSpacing(trimmed, scan: scan)
 
         let glyphs = trimmed.compactMap { $0.glyph.map { scan.glyphs[$0] } }
         let sizes = glyphs.map(\.size).sorted()
@@ -167,6 +208,22 @@ public enum TextLayerExtractor {
             }
             styles.append(st)
             smallCaps.append(font.isSmallCaps)
+        }
+
+        // Digits and punctuation alone don't carry style: OCR layers often set old-style
+        // numerals in a bold or italic font. They take the style of the letters around them.
+        var k2 = 0
+        while k2 < trimmed.count {
+            if trimmed[k2].ch.isLetter || trimmed[k2].ch.isWhitespace || styles[k2].sup { k2 += 1; continue }
+            var e = k2
+            while e + 1 < trimmed.count, !trimmed[e + 1].ch.isLetter, !trimmed[e + 1].ch.isWhitespace, !styles[e + 1].sup { e += 1 }
+            let before = trimmed[..<k2].lastIndex(where: { $0.ch.isLetter }).map { styles[$0] } ?? Style()
+            let after = trimmed[(e + 1)...].firstIndex(where: { $0.ch.isLetter }).map { styles[$0] } ?? Style()
+            for j in k2...e {
+                styles[j].bold = before.bold && after.bold
+                styles[j].italic = before.italic && after.italic
+            }
+            k2 = e + 1
         }
 
         // Whitespace takes the style of its surroundings so spans don't fragment at spaces.

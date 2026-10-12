@@ -146,6 +146,8 @@ public enum BlockBuilder {
             for (a, b) in zip(region, region.dropFirst()) {
                 var split = false
                 if TOCEntry.hasLeader(a.text) { split = true }
+                // A short all-caps line over the text is a section head ("HORSES", "WAR PRISONERS").
+                if Self.isShortCapsLine(a) && !Self.isShortCapsLine(b) { split = true }
                 // Stacked headings: "3. Method" then "3.1. Setup", or a short bold line.
                 if !geom.reachesRight(a) && BlockClassifier.isNumberedSection(b.plainText) && (b.isBold || a.isBold) { split = true }
                 if a.isBold && !b.isBold && Double(a.bbox.width) < 0.6 * geom.width { split = true }
@@ -170,6 +172,13 @@ public enum BlockBuilder {
             blocks.append(makeProse(current, page: page, geom: geom, base: base, context: context))
         }
         return blocks
+    }
+
+    static func isShortCapsLine(_ l: Line) -> Bool {
+        let plain = l.plainText.trimmingCharacters(in: .whitespaces)
+        let letters = plain.filter(\.isLetter)
+        return letters.count >= 4 && plain.count <= 40 && plain.split(separator: " ").count <= 5
+            && letters.allSatisfy { $0.isUppercase || !$0.isCased } && !TextMetrics.endsSentence(plain)
     }
 
     /// Left edge to measure indents from: the column edge, unless the whole region is inset.

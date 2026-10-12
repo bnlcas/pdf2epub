@@ -17,6 +17,16 @@ public enum InlineStyle {
 
     public static func isMarker(_ c: Character) -> Bool { all.contains(c) }
 
+    /// Plain text with superscripts (note references) removed entirely.
+    public static func stripSuperscripts(_ s: String) -> String {
+        var out = ""
+        var inSup = false
+        for c in s {
+            if c == supOn { inSup = true } else if c == supOff { inSup = false } else if !inSup && !all.contains(c) { out.append(c) }
+        }
+        return out
+    }
+
     public static func strip(_ s: String) -> String {
         guard s.contains(where: { all.contains($0) }) else { return s }
         return String(s.filter { !all.contains($0) })

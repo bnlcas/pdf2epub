@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import ArgumentParser
 import PDF2EPUBCore
 
@@ -10,7 +11,7 @@ struct PDF2EPUB: AsyncParsableCommand {
         discussion: """
         Exit status: 0 on success, 1 on failure, 2 on success with warnings.
         """,
-        version: "1.0.0")
+        version: "1.1.0")
 
     @Argument(help: "The PDF to convert.", completion: .file(extensions: ["pdf"]))
     var input: String
@@ -45,6 +46,9 @@ struct PDF2EPUB: AsyncParsableCommand {
     @Flag(name: .shortAndLong, help: "Print details while converting.")
     var verbose = false
 
+    @Flag(name: .customLong("progress-window"), help: "Show a progress window (used by the Finder Quick Action).")
+    var progressWindow = false
+
     @Option(name: .customLong("dump-page"), help: ArgumentHelp("Print the extracted lines of one page (1-based) and exit.", visibility: .hidden))
     var dumpPage: Int?
 
@@ -70,6 +74,20 @@ struct PDF2EPUB: AsyncParsableCommand {
             }
             Foundation.exit(2)
         }
+    }
+
+    /// Runs the conversion in the background while AppKit drives a progress window.
+    @MainActor
+    static func convertWithWindow(_ pipeline: Pipeline, log: Log, input: URL, output: URL) async throws -> ConversionReport {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)   // no Dock icon
+        let window = ProgressWindow(bookName: input.deletingPathExtension().lastPathComponent)
+        window.show()
+        log.onProgress = { stage, current, total in
+            DispatchQueue.main.async { window.update(stage: stage, current: current, total: total) }
+        }
+        defer { window.close() }
+        return try await Task.detached { try await pipeline.convert(input: input, output: output) }.value
     }
 
     mutating func run() async throws {
@@ -110,7 +128,12 @@ struct PDF2EPUB: AsyncParsableCommand {
             pipeline.cleaner = LLMCleaner.makeIfAvailable(log: log)
         }
         do {
-            let report = try await pipeline.convert(input: inputURL, output: outputURL)
+            let report: ConversionReport
+            if progressWindow {
+                report = try await Self.convertWithWindow(pipeline, log: log, input: inputURL, output: outputURL)
+            } else {
+                report = try await pipeline.convert(input: inputURL, output: outputURL)
+            }
             log.info("Wrote \(report.output.path) (\(report.chapters) chapters, \(report.pages) pages, \(report.ocrPages) OCR'd, \(report.stats.totalBytes / 1024) KB)")
             if !report.warnings.isEmpty {
                 log.info("\(report.warnings.count) warning(s):")

@@ -67,16 +67,21 @@ public enum EPUBWriter {
         var spine: [(id: String, href: String)] = []
         var nav: [NavPoint] = []
         var largest = 0
+        var rendered: [RenderedFile] = []
         for (n, chapter) in book.chapters.enumerated() {
             let files = XHTMLRenderer.render(chapter, number: n + 1, profile: profile, language: lang)
-            for (k, f) in files.enumerated() {
-                let doc = XHTMLRenderer.document(title: f.title, body: Self.unlinkMissingNotes(f.body), language: lang)
-                largest = max(largest, doc.utf8.count)
-                let href = "text/\(f.name)"
-                zip.add("OEBPS/\(href)", doc)
-                spine.append((id: "c" + f.name.replacingOccurrences(of: ".xhtml", with: ""), href: href))
-                if k == 0 { nav.append(NavPoint(title: chapter.title, href: href, level: chapter.navLevel)) }
-            }
+            if let first = files.first { nav.append(NavPoint(title: chapter.title, href: "text/\(first.name)", level: chapter.navLevel)) }
+            rendered += files
+        }
+        // Endnote links cross files: resolve "#@id" now that we know where each id landed.
+        let located = Self.locateAnchors(rendered)
+        for f in rendered {
+            let body = Self.unlinkMissingNotes(Self.resolveCrossLinks(f.body, file: f.name, anchors: located))
+            let doc = XHTMLRenderer.document(title: f.title, body: body, language: lang)
+            largest = max(largest, doc.utf8.count)
+            let href = "text/\(f.name)"
+            zip.add("OEBPS/\(href)", doc)
+            spine.append((id: "c" + f.name.replacingOccurrences(of: ".xhtml", with: ""), href: href))
         }
 
         var manifest: [String] = [
@@ -179,9 +184,55 @@ public enum EPUBWriter {
         return (data, EPUBStats(files: spine.count, largestFileBytes: largest, totalBytes: data.count))
     }
 
+    static let anchorPattern = try! NSRegularExpression(pattern: #"id="([nr]\d+-\d+)""#)
+    static let crossLinkPattern = try! NSRegularExpression(pattern: ##"<a href="#@([nr]\d+-\d+)"( id="[^"]*")?>(.*?)</a>"##)
+
+    static func locateAnchors(_ files: [RenderedFile]) -> [String: String] {
+        var out: [String: String] = [:]
+        for f in files {
+            let ns = f.body as NSString
+            for m in anchorPattern.matches(in: f.body, range: NSRange(location: 0, length: ns.length)) {
+                out[ns.substring(with: m.range(at: 1))] = f.name
+            }
+        }
+        return out
+    }
+
+    /// "#@n3-147" → "ch021.xhtml#n3-147" (or "#n3-147" in the same file); unknown targets
+    /// lose the link but keep their text.
+    static func resolveCrossLinks(_ body: String, file: String, anchors: [String: String]) -> String {
+        guard body.contains("href=\"#@") else { return body }
+        let ns = body as NSString
+        var out = body
+        for m in crossLinkPattern.matches(in: body, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let id = ns.substring(with: m.range(at: 1))
+            let idAttr = m.range(at: 2).location == NSNotFound ? "" : ns.substring(with: m.range(at: 2))
+            let inner = ns.substring(with: m.range(at: 3))
+            let replacement: String
+            if let target = anchors[id] {
+                let href = target == file ? "#\(id)" : "\(target)#\(id)"
+                replacement = "<a href=\"\(href)\"\(idAttr)>\(inner)</a>"
+            } else {
+                replacement = inner
+            }
+            out = (out as NSString).replacingCharacters(in: m.range, with: replacement)
+        }
+        return out
+    }
+
     /// A note reference whose note didn't land in the same file becomes a plain superscript.
     static func unlinkMissingNotes(_ body: String) -> String {
         guard body.contains("href=\"#fn") else { return body }
+        var body = body
+        // A note's back-link to a reference that isn't in this file: keep the label only.
+        let back = try! NSRegularExpression(pattern: ##"<a href="#fnref(\d+)">(.*?)</a>"##)
+        let bns = body as NSString
+        for m in back.matches(in: body, range: NSRange(location: 0, length: bns.length)).reversed() {
+            let id = bns.substring(with: m.range(at: 1))
+            if !body.contains("id=\"fnref\(id)\"") {
+                body = (body as NSString).replacingCharacters(in: m.range, with: bns.substring(with: m.range(at: 2)))
+            }
+        }
         let pattern = try! NSRegularExpression(pattern: ##"<a href="#fn(\d+)" id="fnref\d+">(<sup>.*?</sup>)</a>"##)
         let ns = body as NSString
         var out = body

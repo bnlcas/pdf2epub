@@ -4,7 +4,7 @@
 #   Scripts/make-quick-action.sh <output-dir>
 #
 # The action runs pdf2epub on each selected PDF (looking in ~/bin, /usr/local/bin and
-# /opt/homebrew/bin) and posts a notification when each one finishes.
+# /opt/homebrew/bin) with a progress window, and posts a notification when each finishes.
 set -euo pipefail
 
 out="${1:?usage: make-quick-action.sh <output-dir>}"
@@ -31,8 +31,7 @@ if [ -z "${PDF2EPUB:-}" ]; then
 fi
 for f in "$@"; do
   name="$(basename "$f")"
-  notify "PDF to EPUB" "Converting $name…"
-  log="$("$PDF2EPUB" "$f" 2>&1)"
+  log="$("$PDF2EPUB" --progress-window "$f" 2>&1)"
   status=$?
   if [ $status -eq 0 ]; then
     notify "PDF to EPUB" "Done: ${name%.*}.epub"

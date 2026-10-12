@@ -228,5 +228,60 @@ func context(_ hyphenated: Set<String> = [], words: Set<String> = []) -> LayoutC
         #expect(cleaner.validFix(original: "ancle", answer: "ankle") == nil)
         #expect(cleaner.validFix(original: "assem bly", answer: "as-assembly") == nil)
         #expect(cleaner.validFix(original: "assem bly", answer: "assembly") == "assembly")
+        #expect(cleaner.validFix(original: "Setdements", answer: "Settlements") == "Settlements")
+        #expect(cleaner.validFix(original: "Setdements", answer: "Set-dements") == nil)
+        #expect(cleaner.validFix(original: "Peroz", answer: "Perez") == nil)
+        #expect(cleaner.validFix(original: "Caius", answer: "Cains") == nil)
+        #expect(cleaner.validFix(original: "Yüan", answer: "Yuan") == nil)
+        #expect(cleaner.validFix(original: "covcred", answer: "covered") == "covered")
+        #expect(cleaner.validFix(original: "care.147", answer: "care.") == nil)
+        #expect(cleaner.validFix(original: "it.21", answer: "It.21") == nil)
+    }
+}
+
+@Suite struct GlyphSubstitutionTests {
+    @Test func learnsAMisMappedGlyph() {
+        let texts = ["purple, sil\\ and scarlet", "all \\inds of scented wood", "a ban\\ of the river", "the \\ing and his court", "Bhallata\\a"]
+        let lines = texts.map { Line(text: $0, bbox: .zero, fontSize: 10) }
+        let map = GlyphSubstitution.infer(lines, lexicon: Lexicon())
+        #expect(map["\\"] == "k")
+        #expect(GlyphSubstitution.apply(map, to: "sil\\ and all \\inds") == "silk and all kinds")
+    }
+}
+
+@Suite struct OCRTextRepairTests {
+    let lex = Lexicon()
+
+    @Test func smallCapsMixedCase() {
+        #expect(OCRTextRepair.fixSmallCaps("FOREIGN SeTTLeMENTS IN T’ANG", lexicon: lex) == "FOREIGN SETTLEMENTS IN T’ANG")
+        #expect(OCRTextRepair.fixSmallCaps("PARroTs and DEERsKIns", lexicon: lex) == "PARROTS and DEERSKINS")
+        #expect(OCRTextRepair.fixSmallCaps("quoted in ChTS, han 9", lexicon: lex) == "quoted in ChTS, han 9")
+        #expect(OCRTextRepair.fixSmallCaps("Settlements of McDonald", lexicon: lex) == "Settlements of McDonald")
+    }
+
+    @Test func cyrillicLookalikes() {
+        #expect(OCRTextRepair.fixScripts("Mu AD. 1596 (193б); and") == "Mu AD. 1596 (1936); and")
+        #expect(OCRTextRepair.fixScripts("cost 10з.") == "cost 103.")
+        #expect(OCRTextRepair.fixScripts("Москва") == "Москва")
+    }
+
+    @Test func fullwidthPunctuation() {
+        #expect(OCRTextRepair.fixFullwidth("Lionel Giles （1932），825") == "Lionel Giles (1932), 825")
+        #expect(OCRTextRepair.fixFullwidth("Tu Fu杜甫，Chiu") == "Tu Fu杜甫，Chiu")
+    }
+}
+
+@Suite struct MetadataTests {
+    @Test func downloadFileNames() {
+        let m = MetadataGuesser.fromFilename(URL(fileURLWithPath: "/x/The Golden Peaches of Samarkand _ A Study of T'ang Exotics -- Schafer, Edward H_.pdf"))
+        #expect(m.title == "The Golden Peaches of Samarkand: A Study of T'ang Exotics")
+        #expect(m.author == "Edward H. Schafer")
+        #expect(MetadataGuesser.fromFilename(URL(fileURLWithPath: "/x/golden-peaches.pdf")).title == nil)
+    }
+
+    @Test func titleCasing() {
+        #expect(MetadataGuesser.titleCase("THE GOLDEN PEACHES OF SAMARKAND") == "The Golden Peaches of Samarkand")
+        #expect(MetadataGuesser.titleCase("EDWARD H. SCHAFER") == "Edward H. Schafer")
+        #expect(MetadataGuesser.titleCase("Pride and Prejudice") == "Pride and Prejudice")
     }
 }

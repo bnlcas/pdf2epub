@@ -12,10 +12,11 @@ public enum PDFIngest {
         var title = (attrs[PDFDocumentAttribute.titleAttribute] as? String).flatMap(cleanTitle)
         var author = (attrs[PDFDocumentAttribute.authorAttribute] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if author?.isEmpty == true { author = nil }
-        if title == nil {
-            title = fileURL.deletingPathExtension().lastPathComponent
-                .replacingOccurrences(of: "_", with: " ")
-        }
+        // Missing metadata: the download's name often carries it ("Title -- Author.pdf").
+        // (The pipeline may still improve on a bare file name from the title page.)
+        let fromName = MetadataGuesser.fromFilename(fileURL)
+        if title == nil { title = fromName.title }
+        if author == nil { author = fromName.author }
         let subject = (attrs[PDFDocumentAttribute.subjectAttribute] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return Metadata(title: title, author: author, language: nil, subject: subject?.isEmpty == true ? nil : subject)
     }

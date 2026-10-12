@@ -29,8 +29,12 @@ public enum VisionOCR {
         var request = RecognizeDocumentsRequest()
         request.textRecognitionOptions.useLanguageCorrection = true
         request.barcodeDetectionOptions.enabled = false
-        if !languages.isEmpty {
-            request.textRecognitionOptions.recognitionLanguages = languages.map { Locale.Language(identifier: $0) }
+        let langs = ocrLanguages(languages)
+        if !langs.isEmpty {
+            // Auto-detection reads old-style numerals as Cyrillic (6→б, 3→з) and puts
+            // fullwidth CJK punctuation into English text; pin the book's languages instead.
+            request.textRecognitionOptions.automaticallyDetectLanguage = false
+            request.textRecognitionOptions.recognitionLanguages = langs.map { Locale.Language(identifier: $0) }
         }
         let observations = try await request.perform(on: image)
         var lines: [Line] = []
@@ -64,16 +68,26 @@ public enum VisionOCR {
         var request = RecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = true
-        if !languages.isEmpty {
-            request.recognitionLanguages = languages.map { Locale.Language(identifier: $0) }
+        let langs = ocrLanguages(languages)
+        if !langs.isEmpty {
+            request.automaticallyDetectsLanguage = false
+            request.recognitionLanguages = langs.map { Locale.Language(identifier: $0) }
         }
         let observations = try await request.perform(on: image)
         return smoothSizes(observations.compactMap { makeLine($0, pageSize: pageSize, group: nil, isTitle: false) })
     }
 
+    /// `PDF2EPUB_OCR_LANGS=en-US,zh-Hant` overrides the languages, for experiments.
+    static func ocrLanguages(_ languages: [String]) -> [String] {
+        if let env = ProcessInfo.processInfo.environment["PDF2EPUB_OCR_LANGS"] {
+            return env.split(separator: ",").map(String.init)
+        }
+        return languages
+    }
+
     static func makeLine(_ obs: RecognizedTextObservation, pageSize: CGSize, group: Int?, isTitle: Bool) -> Line? {
         guard let candidate = obs.topCandidates(1).first else { return nil }
-        let text = candidate.string.trimmingCharacters(in: .whitespaces)
+        let text = markSuperscripts(candidate, line: obs).trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return nil }
         let box = topLeft(obs.boundingBox.cgRect)
         // The quad's side edges measure the line height even when the box is skewed.
@@ -83,6 +97,29 @@ public enum VisionOCR {
         let size = (edge > 0 ? edge : Double(box.height * pageSize.height)) / lineHeightPerPoint
         return Line(text: text, bbox: box, fontSize: size, confidence: Double(candidate.confidence),
                     group: group, isTitle: isTitle)
+    }
+
+    /// Note references ("care.¹⁴⁷") come out of OCR glued to the word: "care.147". Vision
+    /// can locate any substring, so check whether those digits sit raised above the line.
+    static func markSuperscripts(_ candidate: RecognizedText, line obs: RecognizedTextObservation) -> String {
+        let s = candidate.string
+        guard s.contains(where: \.isNumber) else { return s }
+        let lineBox = obs.boundingBox.cgRect
+        let h = lineBox.height
+        guard h > 0, let regex = try? NSRegularExpression(pattern: #"(?<=[\p{L}.,;:!?’”"')\]])\d{1,3}(?=[\s.,;:)]|$)"#) else { return s }
+        var out = s
+        let ns = s as NSString
+        for m in regex.matches(in: s, range: NSRange(location: 0, length: ns.length)).reversed() {
+            guard let r = Range(m.range, in: s), let digits = candidate.boundingBox(for: r)?.boundingBox.cgRect else { continue }
+            let raise = (digits.minY - lineBox.minY) / h
+            if ProcessInfo.processInfo.environment["PDF2EPUB_DEBUG_SUP"] != nil {
+                FileHandle.standardError.write(Data(String(format: "sup? %@ raise=%.2f height=%.2f\n", String(s[r]), raise, digits.height / h).utf8))
+            }
+            if raise > 0.3 && digits.height / h < 0.75, let ro = Range(m.range, in: out) {
+                out.replaceSubrange(ro, with: "\(InlineStyle.supOn)\(out[ro])\(InlineStyle.supOff)")
+            }
+        }
+        return out
     }
 
     static func smoothSizes(_ lines: [Line]) -> [Line] {

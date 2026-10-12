@@ -82,10 +82,21 @@ cat > "$work/distribution.xml" <<XML
     <welcome file="welcome.html" mime-type="text/html"/>
     <license file="LICENSE.txt"/>
     <options customize="never" require-scripts="false" hostArchitectures="arm64"/>
-    <domains enable_localSystem="true"/>
-    <volume-check>
-        <allowed-os-versions><os-version min="26.0"/></allowed-os-versions>
-    </volume-check>
+    <domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="false"/>
+    <!-- Check the running system up front with a clear message. (A <volume-check> instead
+         just grays out the destination with no explanation when it fails.) -->
+    <installation-check script="checkSystem()"/>
+    <script><![CDATA[
+    function checkSystem() {
+        if (system.compareVersions(system.version.ProductVersion, '26.0') < 0) {
+            my.result.title = 'macOS 26 or later required';
+            my.result.message = 'PDF to EPUB needs macOS 26 (Tahoe) or later. This Mac has macOS ' + system.version.ProductVersion + '.';
+            my.result.type = 'Fatal';
+            return false;
+        }
+        return true;
+    }
+    ]]></script>
     <choices-outline><line choice="default"/></choices-outline>
     <choice id="default" title="PDF to EPUB"><pkg-ref id="$BUNDLE_ID"/></choice>
     <pkg-ref id="$BUNDLE_ID" version="$VERSION" onConclusion="none">component.pkg</pkg-ref>

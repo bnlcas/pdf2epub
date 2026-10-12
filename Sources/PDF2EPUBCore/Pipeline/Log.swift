@@ -33,8 +33,12 @@ public final class Log: @unchecked Sendable {
         if verbose { emit(message) }
     }
 
+    /// Called on every progress update (stage, current, total), e.g. to drive a window.
+    public var onProgress: (@Sendable (String, Int, Int) -> Void)?
+
     /// "page 37/212". On a terminal it redraws one line; otherwise prints every few seconds.
     public func progress(_ stage: String, _ current: Int, _ total: Int) {
+        onProgress?(stage, current, total)
         lock.lock(); defer { lock.unlock() }
         let now = Date()
         let done = current == total

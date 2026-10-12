@@ -53,25 +53,31 @@ public enum XHTMLRenderer {
                 if InlineStyle.isEntirely(text, on: InlineStyle.boldOn, off: InlineStyle.boldOff) {
                     text.removeAll { $0 == InlineStyle.boldOn || $0 == InlineStyle.boldOff }
                 }
-                html = "<h\(lv)>\(inline(text, refs: b.noteRefs ?? [:]))</h\(lv)>\n"
+                html = "<h\(lv)>\(inline(text, refs: b.noteRefs ?? [:], endnotes: b.endnoteRefs ?? [:]))</h\(lv)>\n"
                 afterBreak = true
+            case .paragraph where b.endnoteAnchor != nil, .unknown where b.endnoteAnchor != nil:
+                // An endnote: its number links back to the reference in the text.
+                let id = b.endnoteAnchor ?? ""
+                let label = escape(b.footnoteMarker ?? "")
+                html = "<p class=\"noindent\" id=\"n\(id)\"><a href=\"#@r\(id)\">\(label).</a> \(inline(Self.dropLeadingNumber(b.text), refs: [:]))</p>\n"
+                afterBreak = false
             case .paragraph, .unknown:
                 let cls = afterBreak ? " class=\"first\""
                     : b.flags.contains(.tocEntry) ? " class=\"noindent\""
                     : (b.isCentered && b.plainText.count < 100 ? " class=\"center\"" : "")
-                html = "<p\(cls)>\(inline(b.text, refs: b.noteRefs ?? [:]))</p>\n"
+                html = "<p\(cls)>\(inline(b.text, refs: b.noteRefs ?? [:], endnotes: b.endnoteRefs ?? [:]))</p>\n"
                 afterBreak = false
             case .blockquote:
-                html = "<blockquote><p>\(inline(b.text, refs: b.noteRefs ?? [:]))</p></blockquote>\n"
+                html = "<blockquote><p>\(inline(b.text, refs: b.noteRefs ?? [:], endnotes: b.endnoteRefs ?? [:]))</p></blockquote>\n"
                 afterBreak = false
             case .verse:
-                html = "<div class=\"stanza\">\(inline(b.text, refs: b.noteRefs ?? [:]))</div>\n"
+                html = "<div class=\"stanza\">\(inline(b.text, refs: b.noteRefs ?? [:], endnotes: b.endnoteRefs ?? [:]))</div>\n"
                 afterBreak = true
             case .listItem:
                 var items: [String] = []
                 var j = i
                 while j < blocks.count, blocks[j].kind == .listItem {
-                    items.append("<li>\(inline(blocks[j].text, refs: blocks[j].noteRefs ?? [:]))</li>")
+                    items.append("<li>\(inline(blocks[j].text, refs: blocks[j].noteRefs ?? [:], endnotes: blocks[j].endnoteRefs ?? [:]))</li>")
                     j += 1
                 }
                 html = "<ul>\n" + items.joined(separator: "\n") + "\n</ul>\n"
@@ -86,11 +92,11 @@ public enum XHTMLRenderer {
                 }
                 let alt = escape(InlineStyle.strip(caption ?? "Figure").replacingOccurrences(of: "\n", with: " "))
                 html = "<figure><img src=\"../\(ref)\" alt=\"\(alt)\"/>"
-                if let caption { html += "<figcaption>\(inline(caption, refs: blocks[i + 1].noteRefs ?? [:]))</figcaption>" }
+                if let caption { html += "<figcaption>\(inline(caption, refs: blocks[i + 1].noteRefs ?? [:], endnotes: blocks[i + 1].endnoteRefs ?? [:]))</figcaption>" }
                 html += "</figure>\n"
                 afterBreak = true
             case .caption:
-                html = "<p class=\"caption\">\(inline(b.text, refs: b.noteRefs ?? [:]))</p>\n"
+                html = "<p class=\"caption\">\(inline(b.text, refs: b.noteRefs ?? [:], endnotes: b.endnoteRefs ?? [:]))</p>\n"
                 afterBreak = true
             }
             // Keep a block together with the notes that follow it.
@@ -145,7 +151,21 @@ public enum XHTMLRenderer {
 
     /// Escapes text and turns style markers into tags. Superscripts naming a linked
     /// footnote in `refs` (marker → note id) become links.
-    static func inline(_ text: String, refs: [String: Int]) -> String {
+    /// Removes a note's own leading number ("¹⁴⁷ Laufer…", "147. Laufer…").
+    static func dropLeadingNumber(_ text: String) -> String {
+        var t = text.trimmingCharacters(in: .whitespaces)
+        if t.first == InlineStyle.supOn, let end = t.firstIndex(of: InlineStyle.supOff) {
+            t.removeSubrange(t.startIndex...end)
+        } else if let r = t.range(of: #"^[\d ]{1,5}[.)]?\s"#, options: .regularExpression) {
+            t.removeSubrange(r)
+        }
+        return t.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Escapes text and turns style markers into tags. Superscripts naming a linked
+    /// footnote (`refs`: marker → note id, same file) or endnote (`endnotes`: marker → id,
+    /// resolved across files by the writer) become links.
+    static func inline(_ text: String, refs: [String: Int], endnotes: [String: String]) -> String {
         let t = InlineStyle.balance(text)
         var out = ""
         var supBuffer: String? = nil
@@ -158,6 +178,9 @@ public enum XHTMLRenderer {
                     if let id = refs[key], !usedRefs.contains(key) {
                         usedRefs.insert(key)
                         out += "<a href=\"#fn\(id)\" id=\"fnref\(id)\"><sup>\(escapeInline(content))</sup></a>"
+                    } else if let id = endnotes[key], !usedRefs.contains(key) {
+                        usedRefs.insert(key)
+                        out += "<a href=\"#@n\(id)\" id=\"r\(id)\"><sup>\(escapeInline(content))</sup></a>"
                     } else {
                         out += "<sup>\(escapeInline(content))</sup>"
                     }
@@ -179,6 +202,10 @@ public enum XHTMLRenderer {
         }
         if let rest = supBuffer { out += "<sup>\(escapeInline(rest))</sup>" }
         return out
+    }
+
+    static func inline(_ text: String, refs: [String: Int]) -> String {
+        inline(text, refs: refs, endnotes: [:])
     }
 
     /// Escapes text that may contain italic/bold markers (inside a superscript).

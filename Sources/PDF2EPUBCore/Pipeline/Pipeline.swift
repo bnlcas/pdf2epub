@@ -48,6 +48,7 @@ public final class Pipeline {
     let options: ConversionOptions
     let log: Log
     let lexicon = Lexicon()
+    var hiddenLayerIsStyled = false
     /// The cleanup pass; nil runs heuristics only.
     public var cleaner: (any BlockCleaner)?
 
@@ -77,11 +78,14 @@ public final class Pipeline {
         var metadata = PDFIngest.metadata(doc, fileURL: input)
         if let t = options.title { metadata.title = t }
         if let a = options.author { metadata.author = a }
-        let outline = PDFIngest.outline(doc)
+        var outline = PDFIngest.outline(doc)
 
         // Language first: it drives the dictionary used to judge text layers.
         lexicon.detectLanguage(from: sampleText(doc))
         metadata.language = lexicon.languageCode ?? "en"
+
+        hiddenLayerIsStyled = Self.hiddenLayerIsStyled(doc)
+        log.debug("hidden OCR layer: \(hiddenLayerIsStyled ? "styled (trusted if it reads well)" : "plain or absent")")
 
         // 1. Ingest: text layer or OCR, page by page.
         var (pages, infos) = try await ingest(doc)
@@ -92,6 +96,24 @@ public final class Pipeline {
         for p in pages.indices {
             for l in pages[p].lines.indices { pages[p].lines[l].text = Normalizer.normalize(pages[p].lines[l].text) }
             pages[p].lines.removeAll { $0.plainText.trimmingCharacters(in: .whitespaces).isEmpty }
+        }
+        // Undo consistent glyph mis-mappings in OCR'd text (an italic "k" read as "\").
+        let ocrText = pages.filter { $0.source == .ocr || $0.hiddenLayer }.flatMap(\.lines)
+        let glyphMap = GlyphSubstitution.infer(ocrText, lexicon: lexicon)
+        if !glyphMap.isEmpty {
+            log.debug("glyph substitutions: \(glyphMap.map { "\($0.key)→\($0.value)" }.joined(separator: ", "))")
+            for p in pages.indices where pages[p].source == .ocr || pages[p].hiddenLayer {
+                for l in pages[p].lines.indices {
+                    pages[p].lines[l].text = GlyphSubstitution.apply(glyphMap, to: pages[p].lines[l].text)
+                }
+            }
+        }
+        // Small caps read as mixed case, Cyrillic look-alikes, fullwidth punctuation.
+        let latinScript = !["ru", "uk", "bg", "el", "sr", "mk", "be"].contains(lexicon.languageCode ?? "en")
+        for p in pages.indices where pages[p].source == .ocr || pages[p].hiddenLayer {
+            for l in pages[p].lines.indices {
+                pages[p].lines[l].text = OCRTextRepair.repair(pages[p].lines[l].text, lexicon: lexicon, latinScript: latinScript)
+            }
         }
         let allLines = pages.flatMap(\.lines)
         let vocab = TextJoiner.vocabulary(from: allLines.map(\.text))
@@ -108,21 +130,34 @@ public final class Pipeline {
         lap("normalize+stats")
         // 3. Layout.
         MarginFilter.apply(&pages, bodySize: bodySize)
+
+        if outline.isEmpty {
+            var extra: [Int: [Line]] = [:]
+            if let range = PrintedContents.candidatePages(pages, pageCount: doc.pageCount) {
+                extra = await contentsPageNumbers(doc, pages: Array(pages[range]))
+            }
+            outline = PrintedContents.entries(pages: pages, folios: FolioMap(pages: pages), pageCount: doc.pageCount,
+                                              extraNumbers: extra)
+            if !outline.isEmpty { log.debug("chapters from the printed contents: \(outline.map(\.title).joined(separator: " | "))") }
+        }
         var figures: [FigureRegion] = []
         if options.profile.maxImageWidth > 0 {
             figures = FigureDetector.detect(pages: &pages, doc: doc, context: context)
         }
         lap("margins+figures")
-        let suspicious = OCRSuspects(lexicon: lexicon, lines: pages.filter { $0.source == .ocr }.flatMap(\.lines))
+        // OCR'd text (by Vision, or a scanner's hidden layer) gets checked for misreadings.
+        let ocrLike = { (p: PageLines) in p.source == .ocr || p.hiddenLayer }
+        let suspicious = OCRSuspects(lexicon: lexicon, lines: pages.filter(ocrLike).flatMap(\.lines))
+        let ocrLikePages = Set(pages.filter(ocrLike).map(\.index))
         var blocks: [Block] = []
         for page in pages {
             var pageBlocks = BlockBuilder.build(page: page, context: context)
-            for i in pageBlocks.indices where pageBlocks[i].source == .ocr {
+            for i in pageBlocks.indices where ocrLikePages.contains(pageBlocks[i].page) {
                 let split = suspicious.splitRunTogetherWords(pageBlocks[i].plainText)
                 if split != pageBlocks[i].plainText, let patched = TextPatch.apply(to: pageBlocks[i].text, newPlain: split) {
                     pageBlocks[i].text = patched
                 }
-                if pageBlocks[i].confidence < 0.45 || suspicious.hasSuspectWords(pageBlocks[i].plainText) {
+                if pageBlocks[i].confidence < 0.45 || suspicious.hasSuspectWords(InlineStyle.stripSuperscripts(pageBlocks[i].text)) {
                     pageBlocks[i].flags.insert(.lowConfidence)
                 }
             }
@@ -132,7 +167,7 @@ public final class Pipeline {
         lap("blocks")
         BlockClassifier.classify(&blocks, context: context)
         // OCR'd "headings" full of non-words are often stamps, inscriptions or noise: ask.
-        for i in blocks.indices where blocks[i].source == .ocr && blocks[i].kind.isHeading
+        for i in blocks.indices where ocrLikePages.contains(blocks[i].page) && blocks[i].kind.isHeading
             && suspicious.hasSuspectWords(blocks[i].plainText) {
             blocks[i].flags.insert(.ambiguousKind)
         }
@@ -141,6 +176,16 @@ public final class Pipeline {
         try dump("blocks-heuristic", blocks)
 
         lap("joins")
+        // Title page fallback for whatever the PDF and its file name didn't say.
+        if metadata.title == nil || metadata.author == nil {
+            let guess = MetadataGuesser.fromTitlePage(blocks, bodySize: bodySize[.textLayer] ?? bodySize[.ocr] ?? 10, lexicon: lexicon)
+            if metadata.title == nil, options.title == nil { metadata.title = guess.title }
+            if metadata.author == nil, options.author == nil { metadata.author = guess.author }
+        }
+        if metadata.title == nil {
+            metadata.title = input.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "_", with: " ")
+        }
+
         // 4. Language-model cleanup.
         if let cleaner {
             if let llm = cleaner as? LLMCleaner {
@@ -159,9 +204,12 @@ public final class Pipeline {
         guard !document.blocks.isEmpty else { throw ConversionError.noContent }
 
         // 5. Images and structure.
+        log.progress("writing", 0, 1)
         let images = FigureDetector.extract(&document.blocks, doc: doc, profile: options.profile, log: log)
         lap("images")
-        let finalChapters = ChapterBuilder.build(document)
+        var finalChapters = ChapterBuilder.build(document)
+        let endnotes = EndnoteLinker.link(&finalChapters, folios: FolioMap(pages: pages))
+        if endnotes > 0 { log.debug("linked \(endnotes) endnote reference(s)") }
         try dump("chapters", finalChapters)
 
         lap("chapters")
@@ -212,6 +260,7 @@ public final class Pipeline {
                 } else {
                     var p = PageLines(index: index, size: extracted.size, source: .textLayer, lines: extracted.lines)
                     p.figureRects = extracted.imageRects
+                    p.hiddenLayer = extracted.invisibleFraction > 0.5
                     pages[slot] = p
                     done += 1
                     log.progress("page", done, indices.count)
@@ -224,6 +273,22 @@ public final class Pipeline {
             log.warn("low-confidence OCR on \(lowConfidence.count) page(s): \(lowConfidence.prefix(10).map { String($0.index + 1) }.joined(separator: ", "))")
         }
         return (pages.compactMap { $0 }, infos.compactMap { $0 })
+    }
+
+    /// OCR the contents pages that came from a text layer and keep just the bare numbers in
+    /// the right-hand half: the page-number column a text layer sometimes drops.
+    func contentsPageNumbers(_ doc: PDFDocument, pages: [PageLines]) async -> [Int: [Line]] {
+        var out: [Int: [Line]] = [:]
+        for p in pages where p.source == .textLayer {
+            guard let page = doc.page(at: p.index), let image = PageRenderer.render(page, dpi: 300) else { continue }
+            let ocr = await VisionOCR.recognize(image, pageSize: p.size, languages: ["en-US"])
+            let numbers = ocr.lines.filter { l in
+                l.bbox.minX > 0.55 && (MarginFilter.ocrFolio(l.plainText).allSatisfy(\.isNumber) || ["I", "l"].contains(l.plainText))
+                    && !p.lines.contains { $0.bbox.intersects(l.bbox) }
+            }
+            if !numbers.isEmpty { out[p.index] = numbers }
+        }
+        return out
     }
 
     struct OCRDecision { var ocr: Bool; var quality: Double?; var reason: String }
@@ -239,14 +304,42 @@ public final class Pipeline {
         if text.count < 15 {
             return OCRDecision(ocr: imageArea > 0.25, quality: nil, reason: "no text layer")
         }
-        if page.invisibleFraction > 0.5 {
-            return OCRDecision(ocr: true, quality: nil, reason: "scanner's hidden OCR layer")
-        }
         let q = lexicon.quality(of: text)
-        if q.tokens >= 8 && q.score < options.textQualityThreshold {
-            return OCRDecision(ocr: true, quality: q.score, reason: String(format: "text layer scores %.2f", q.score))
+        // A scanner's hidden OCR layer can be excellent (superscript note numbers, italics,
+        // small caps; better than re-OCR) or junk. Keep it if it reads like real text, but
+        // hold it to a higher bar than a born-digital layer.
+        let hidden = page.invisibleFraction > 0.5
+        if hidden && !hiddenLayerIsStyled {
+            return OCRDecision(ocr: true, quality: nil, reason: "plain hidden OCR layer")
+        }
+        // (Indexes and bibliographies, full of names and numbers, score low on a dictionary
+        // check; a styled professional layer is still the best source for them.)
+        let threshold = hidden ? min(options.textQualityThreshold, 0.45) : options.textQualityThreshold
+        if q.tokens >= 8 && q.score < threshold {
+            let what = hidden ? "hidden OCR layer" : "text layer"
+            return OCRDecision(ocr: true, quality: q.score, reason: String(format: "%@ scores %.2f", what, q.score))
         }
         return OCRDecision(ocr: false, quality: q.tokens >= 8 ? q.score : nil, reason: "text layer ok")
+    }
+
+    /// Whether the document's invisible OCR layer, if any, carries real typography: several
+    /// fonts, with italics or bold. Professional OCR exports do (and mark superscripts and
+    /// small caps); Internet Archive-style layers set everything in one plain font, losing
+    /// sizes and styles, so Vision rebuilds the structure better.
+    static func hiddenLayerIsStyled(_ doc: PDFDocument) -> Bool {
+        var fonts = Set<String>()
+        var styled = false
+        let n = doc.pageCount
+        for i in stride(from: 0, to: n, by: max(1, n / 20)) {
+            guard let page = doc.page(at: i)?.pageRef else { continue }
+            let scan = GlyphScanner.scan(page)
+            for g in scan.glyphs where g.invisible {
+                let f = scan.fonts[g.font]
+                fonts.insert(f.name)
+                if f.isItalic || f.isBold { styled = true }
+            }
+        }
+        return fonts.count >= 3 || (styled && fonts.count >= 2)
     }
 
     func sampleText(_ doc: PDFDocument) -> String {

@@ -79,12 +79,16 @@ pdf2epub <input.pdf> [-o output.epub]
          [--title "…"] [--author "…"]
          [--verse]                      # keep line breaks in short-line passages
          [--keep-intermediate <dir>]    # per-stage JSON + the model transcript
+         [--progress-window]            # a progress bar window (the Quick Action uses it)
          [--verbose]
 ```
 
 Exit status is 0 on success, 1 on failure, and 2 on success with warnings (for example,
 low-confidence OCR pages, or passages the model declined to review). Progress
-(`page 37/212`) goes to stderr.
+(`page 37/212`) goes to stderr, or to a small window with `--progress-window`.
+
+When the PDF has no title or author, they come from a download-style file name
+(`Title _ Subtitle -- Last, First_.pdf`) or from the title page.
 
 Profiles:
 
@@ -106,19 +110,28 @@ PDF ─► Ingest ─► Layout heuristics ─► LLM review ─► Structure �
 - **Ingest** (`Sources/PDF2EPUBCore/Ingest`): PDFKit's attributed strings report every font
   as "Helvetica", so `GlyphScanner` walks the content stream with `CGPDFScanner` to recover
   each glyph's real font (italic, bold, small caps), size, and position. It then matches them
-  to PDFKit's characters. A page is sent to OCR when it has no text layer, when its text
-  layer is a scanner's invisible OCR layer, or when its words mostly fail the spell checker.
+  to PDFKit's characters. A scanner's invisible OCR layer is kept when it carries real
+  typography (several fonts, italics: professional OCR, which also marks superscript note
+  numbers) and reads well. A page goes to Vision OCR when it has no text layer, a plain
+  single-font hidden layer (Internet Archive style), or text that mostly fails the spell
+  checker.
 - **OCR** (`OCR/VisionOCR.swift`): `RecognizeDocumentsRequest`, with `RecognizeTextRequest`
-  as a fallback. Tables are cropped as images.
+  as a fallback, pinned to the book's language (auto-detection turns old-style numerals into
+  Cyrillic). Tables are cropped as images. OCR'd text then gets deterministic repairs
+  (`Cleanup/`): small caps read as mixed case (SeTTLeMENTS → SETTLEMENTS), Cyrillic
+  look-alikes, fullwidth punctuation, and glyph mis-mappings learned from the book itself
+  (one layer's italic "k" came out as "\").
 - **Layout** (`Layout/`): running heads and folios (by repetition, position, and page-number
   sequence); two-column reading order; paragraphs (by indent, gaps, and short last lines);
   verse (capitalized lines, the fill test, alternating indents); headings; footnotes;
   dehyphenation that follows the book's own spelling ("to-day" stays if the book writes
   it); and joins across page breaks.
 - **LLM review** (`Cleanup/`): only for the cases the heuristics flag. See below.
-- **Structure and EPUB** (`Structure/`, `EPUB/`): chapters come from the PDF outline, or
-  from detected headings when there is none. Footnotes become linked endnotes in the same
-  file. Figures and captions are paired. Packaging uses its own zip writer, with `mimetype`
+- **Structure and EPUB** (`Structure/`, `EPUB/`): chapters come from the PDF outline; else
+  from the book's printed Contents page, placed through the printed page numbers (this
+  works even when chapter titles are display art); else from detected headings. Footnotes
+  become linked notes in the same file; references to a Notes chapter link to the right
+  endnote and back. Figures and captions are paired. Packaging uses its own zip writer, with `mimetype`
   stored first.
 
 ### What the day-one spikes found (spec §8)
@@ -140,8 +153,9 @@ PDF ─► Ingest ─► Layout heuristics ─► LLM review ─► Structure �
    - "heading, text or junk?"
 
    A spelling change is accepted only if it turns a non-word into a word *through a typical
-   OCR confusion* (rn↔m, c↔e, a dropped i). Elisions and ligatures are never removed. With
-   these rules, the pass is never worse than heuristics alone on the test fixtures.
+   OCR confusion* (rn↔m, tl↔d, c↔e). Digits, elisions, diacritics and ligatures are never
+   removed, and names are left alone. With these rules, the pass is never worse than
+   heuristics alone on the test fixtures. It asks at most 400 questions per book.
 
 ## Development
 
