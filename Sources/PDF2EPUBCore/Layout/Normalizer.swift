@@ -47,9 +47,20 @@ public enum Normalizer {
             i += 1
         }
         out = out.precomposedStringWithCanonicalMapping
+        out = joinSplitSuperscripts(out)
         // Collapse runs of spaces.
         while out.contains("  ") { out = out.replacingOccurrences(of: "  ", with: " ") }
         return out
+    }
+
+    /// "state.1⁴⁸" → "state.¹⁴⁸": some fonts' narrow "1" isn't measured as raised, so a
+    /// note number loses its first digit to the line. Digits glued to a word or punctuation
+    /// right before a superscript belong to it ("in 694²⁶", after a space, is left alone).
+    static func joinSplitSuperscripts(_ s: String) -> String {
+        guard s.contains(InlineStyle.supOn) else { return s }
+        let on = String(InlineStyle.supOn), off = String(InlineStyle.supOff)
+        let pattern = "(?<=[\\p{L}.,;:!?”’\"')\\]])(\\d{1,2})\(on)(\\d{1,2})\(off)"
+        return s.replacingOccurrences(of: pattern, with: "\(on)$1$2\(off)", options: .regularExpression)
     }
 
     static func isLowerLetter(_ chars: [Character], _ i: Int) -> Bool {

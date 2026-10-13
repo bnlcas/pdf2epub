@@ -333,3 +333,12 @@ func context(_ hyphenated: Set<String> = [], words: Set<String> = []) -> LayoutC
         #expect(!BlockClassifier.isRunInHeading(signoff, next: body))
     }
 }
+
+@Suite struct SplitSuperscriptTests {
+    @Test func rejoinsLostFirstDigit() {
+        let on = InlineStyle.supOn, off = InlineStyle.supOff
+        #expect(Normalizer.normalize("the state.1\(on)48\(off) The") == "the state.\(on)148\(off) The")
+        #expect(Normalizer.normalize("court in 694\(on)26\(off) and") == "court in 694\(on)26\(off) and")
+        #expect(Normalizer.normalize("directions.\(on)159\(off)") == "directions.\(on)159\(off)")
+    }
+}
