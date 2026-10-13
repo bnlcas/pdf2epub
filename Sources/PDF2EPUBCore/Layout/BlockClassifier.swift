@@ -49,6 +49,8 @@ public enum BlockClassifier {
                 blocks[i].kind = .heading(2)
             } else if b.lines.count == 1 && BlockBuilder.isShortCapsLine(b.lines[0]) && !isBareNumeral(plain) {
                 blocks[i].kind = .heading(3)
+            } else if isRunInHeading(b, next: i + 1 < blocks.count ? blocks[i + 1] : nil) {
+                blocks[i].kind = .heading(3)
             } else if isBareNumeral(plain) && (b.isCentered || rel > 1.05) {
                 blocks[i].kind = .heading(2)
             } else if b.isCentered && b.lines.count == 1 && n < 70 && !TextMetrics.endsSentence(plain) {
@@ -81,6 +83,7 @@ public enum BlockClassifier {
                 blocks[i].kind = .runningHeader
             }
         }
+        markNumberedLists(&blocks)
         mergeDropCaps(&blocks, context: context)
         mergeChapterTitles(&blocks)
         absorbShortVerse(&blocks)
@@ -114,6 +117,18 @@ public enum BlockClassifier {
     }
 
     // MARK: - Patterns
+
+    /// A few title-case words alone on a line, followed by a paragraph: "Poetry".
+    static func isRunInHeading(_ b: Block, next: Block?) -> Bool {
+        let plain = b.plainText.trimmingCharacters(in: .whitespaces)
+        let words = plain.split(separator: " ")
+        guard b.lines.count == 1, (1...5).contains(words.count), plain.count <= 40,
+              !TextMetrics.endsSentence(plain), !plain.contains(","), !plain.contains(";"),
+              let first = plain.first, first.isUppercase, plain.contains(where: \.isLowercase),
+              let next, next.kind == .paragraph, next.page == b.page, next.plainText.count > 80 else { return false }
+        // Title case: every long word capitalized.
+        return words.allSatisfy { $0.count <= 3 || $0.first?.isUppercase == true }
+    }
 
     public static func isChapterHeading(_ plain: String) -> Bool {
         let t = plain.lowercased().trimmingCharacters(in: .whitespaces)
@@ -168,6 +183,35 @@ public enum BlockClassifier {
     }
 
     // MARK: - Merges
+
+    /// Runs of paragraphs numbered 1., 2., 3. (or a), b), c)) become an ordered list.
+    static func markNumberedLists(_ blocks: inout [Block]) {
+        func ordinal(_ b: Block) -> Int? {
+            let plain = b.plainText.trimmingCharacters(in: .whitespaces)
+            guard let m = plain.range(of: #"^\(?([0-9]{1,2}|[a-z])[.)]\s"#, options: .regularExpression) else { return nil }
+            let token = plain[m].trimmingCharacters(in: CharacterSet(charactersIn: "().) "))
+            if let n = Int(token) { return n }
+            return token.unicodeScalars.first.map { Int($0.value) - 96 }
+        }
+        var i = 0
+        while i < blocks.count {
+            guard [.paragraph, .listItem].contains(blocks[i].kind), let start = ordinal(blocks[i]), start <= 3 else { i += 1; continue }
+            var j = i + 1, expected = start + 1
+            while j < blocks.count, [.paragraph, .listItem].contains(blocks[j].kind), ordinal(blocks[j]) == expected {
+                j += 1; expected += 1
+            }
+            if j - i >= 2 {
+                let lettered = blocks[i].plainText.trimmingCharacters(in: .whitespaces).dropFirst(blocks[i].plainText.hasPrefix("(") ? 1 : 0).first?.isLetter == true
+                for k in i..<j {
+                    blocks[k].kind = .listItem
+                    blocks[k].listOrdinal = ordinal(blocks[k])
+                    blocks[k].listLettered = lettered
+                    blocks[k].text = blocks[k].text.replacingOccurrences(of: #"^\s*\(?([0-9]{1,2}|[a-z])[.)]\s+"#, with: "", options: .regularExpression)
+                }
+            }
+            i = max(j, i + 1)
+        }
+    }
 
     /// A one-letter block in a big size right before a paragraph is a drop cap.
     static func mergeDropCaps(_ blocks: inout [Block], context: LayoutContext) {

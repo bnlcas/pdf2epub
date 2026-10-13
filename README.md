@@ -178,6 +178,9 @@ automatically.
 - **epubcheck** (Java, development only):
   `java -jar epubcheck.jar book.epub`. Every corpus book currently passes with 0 errors and
   0 warnings.
+- **Excerpts:** `swift Scripts/excerpt-pdf.swift book.pdf excerpt.pdf 1-60,296-305` copies
+  chosen pages (text layer included) into a smaller test PDF. Keep local test books in
+  `TestCorpus/`, which git ignores.
 - **Debugging:**
   - `--keep-intermediate dir` writes `blocks-heuristic.json`, `blocks-cleaned.json`,
     `chapters.json`, and `llm-transcript.txt`.

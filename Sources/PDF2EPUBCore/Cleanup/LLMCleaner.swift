@@ -20,11 +20,15 @@ public final class LLMCleaner: BlockCleaner {
     public var transcriptURL: URL?
     var fixCache: [String: String?] = [:]
     var refusals = Set<Int>()
-    public var suspects: OCRSuspects?
+    public var suspects: OCRSuspects? {
+        didSet { fixer = OCRFixer(suspects: suspects) }
+    }
+    var fixer = OCRFixer(suspects: nil)
 
     init(model: SystemLanguageModel, suspects: OCRSuspects?) {
         self.model = model
         self.suspects = suspects
+        self.fixer = OCRFixer(suspects: suspects)
     }
 
     public static func makeIfAvailable(log: Log, suspects: OCRSuspects? = nil) -> LLMCleaner? {
@@ -64,9 +68,7 @@ public final class LLMCleaner: BlockCleaner {
     }
 
     public func clean(_ blocks: inout [Block], log: Log) async {
-        let autoFixed = applyCertainFixes(&blocks)
-        if autoFixed > 0 { log.debug("cleanup: \(autoFixed) unambiguous OCR fix(es) from the dictionary") }
-        var tasks = makeTasks(blocks)
+        var tasks = makeTasks(blocks, log: log)
         if tasks.count > maxQuestions {
             // Structure questions first (cheap, high value), then fixes in book order.
             let structural = tasks.filter { if case .fix = $0 { return false } else { return true } }
@@ -90,71 +92,29 @@ public final class LLMCleaner: BlockCleaner {
         }
     }
 
-    func makeTasks(_ blocks: [Block]) -> [Task] {
+    func makeTasks(_ blocks: [Block], log: Log? = nil) -> [Task] {
         var tasks: [Task] = []
+        var fixes = 0
         for (i, b) in blocks.enumerated() where !b.kind.isFurniture && b.kind != .figure {
+            log?.progress("preparing", blocks.count / 2 + i / 2 + 1, blocks.count)
             if b.flags.contains(.ambiguousKind) { tasks.append(.kind(block: i)) }
             if b.flags.contains(.ambiguousJoin), let p = FlowJoiner.previousFlowing(blocks, before: i, allowVerse: true) {
                 tasks.append(.join(block: i, previous: p))
             }
-            if b.flags.contains(.lowConfidence), let suspects {
+            // Enough fix questions for the cap: keep scanning only for structural ones.
+            if b.flags.contains(.lowConfidence), let suspects, fixes < maxQuestions {
                 for fragment in suspects.suspects(in: InlineStyle.stripSuperscripts(b.text)).prefix(8) {
                     // A plain word gets a question only if some dictionary word could be the
                     // answer (an OCR confusion away); otherwise no answer could pass validation.
-                    if let word = Self.plainWord(fragment) {
-                        guard confusableGuesses(word).count >= 2 else { continue }
+                    if let word = OCRFixer.plainWord(fragment) {
+                        guard fixer.confusableGuesses(word).count >= 2 else { continue }
                     }
                     tasks.append(.fix(block: i, fragment: fragment))
+                    fixes += 1
                 }
             }
         }
         return tasks
-    }
-
-    /// The fragment as a bare word, if it is one ("poctry," → "poctry").
-    static func plainWord(_ fragment: String) -> String? {
-        let w = fragment.trimmingCharacters(in: CharacterSet.punctuationCharacters.union(.symbols))
-        return !w.isEmpty && w.allSatisfy(\.isLetter) ? w : nil
-    }
-
-    /// Dictionary suggestions that are an OCR confusion away from `word`.
-    func confusableGuesses(_ word: String) -> [String] {
-        guard let lexicon = suspects?.lexicon else { return [] }
-        return lexicon.guesses(word).filter {
-            !$0.contains(" ") && !$0.contains("-") && $0 != word && Self.isOCRConfusion(word, $0) && lexicon.isWord($0)
-        }
-    }
-
-    /// Fixes with exactly one possible answer don't need the model: "forcigner" can only be
-    /// "foreigner". Words that recur in the book are left alone (likely real terms).
-    func applyCertainFixes(_ blocks: inout [Block]) -> Int {
-        guard let suspects else { return 0 }
-        var cache: [String: String?] = [:]
-        var fixed = 0
-        for i in blocks.indices where blocks[i].flags.contains(.lowConfidence) {
-            for fragment in suspects.suspects(in: InlineStyle.stripSuperscripts(blocks[i].text)) {
-                guard let word = Self.plainWord(fragment), word.count >= 5, word.allSatisfy(\.isLowercase),
-                      (suspects.counts[word.lowercased()] ?? 0) < 3 else { continue }
-                let answer: String?
-                if let c = cache[word] { answer = c } else {
-                    // The correction must be a word this book itself uses elsewhere.
-                    let guesses = confusableGuesses(word).filter {
-                        $0.allSatisfy(\.isLowercase) && (suspects.counts[$0] ?? 0) >= 2
-                    }
-                    answer = guesses.count == 1 ? guesses[0] : nil
-                    cache[word] = answer
-                }
-                guard let answer, let valid = validFix(original: word, answer: answer) else { continue }
-                let plain = blocks[i].plainText
-                guard let r = plain.range(of: word) else { continue }
-                if let patched = TextPatch.apply(to: blocks[i].text, newPlain: plain.replacingCharacters(in: r, with: valid)) {
-                    blocks[i].text = patched
-                    transcript.append("### page \(blocks[i].page + 1) (dictionary)\n\(word) → \(valid)")
-                    fixed += 1
-                }
-            }
-        }
-        return fixed
     }
 
     func ask(_ instructions: String, _ prompt: String, page: Int, log: Log) async -> String? {
@@ -187,7 +147,7 @@ public final class LLMCleaner: BlockCleaner {
             } else {
                 let sentence = Self.sentence(around: fragment, in: b.plainText)
                 let answer = await ask(Self.fixInstructions, "Sentence: \(sentence)\nFragment: \(fragment)", page: b.page, log: log)
-                fixed = answer.flatMap { validFix(original: fragment, answer: $0) }
+                fixed = answer.flatMap { fixer.validFix(original: fragment, answer: $0) }
                 fixCache[fragment] = fixed
             }
             guard let fixed, fixed != fragment else { return false }
@@ -269,137 +229,6 @@ public final class LLMCleaner: BlockCleaner {
         is the title of a chapter, part or section; TEXT if it belongs to the book's prose or verse; \
         JUNK if it is a running header, a page number or scanning noise. Reply with one word.
         """
-
-    // MARK: - Validation
-
-    /// Accepts a fix only if it repairs something and modernizes nothing.
-    ///
-    /// The model likes to "help": unnumber'd → unnumbered, favouring → favoring,
-    /// Clytæmnestra → Clytemnestra. So: punctuation-only repairs are fine; a spelling change
-    /// is allowed only from a non-word to a word; elisions and ligatures are never removed.
-    func validFix(original: String, answer raw: String) -> String? {
-        var answer = raw.components(separatedBy: .newlines).first ?? raw
-        answer = answer.trimmingCharacters(in: .whitespaces)
-        for prefix in ["Fragment:", "Corrected:", "Answer:"] where answer.hasPrefix(prefix) {
-            answer = String(answer.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
-        }
-        if answer.count >= 2, answer.first == "\"", answer.last == "\"", !original.hasPrefix("\"") {
-            answer = String(answer.dropFirst().dropLast())
-        }
-        answer = SmartQuotes.apply(answer)
-        guard !answer.isEmpty, answer != original else { return nil }
-        // rn↔m and cl↔d cost two edits.
-        guard TextMetrics.distance(original, answer) <= max(2, min(3, original.count / 3)) else { return nil }
-        let ow = original.split(separator: " ").count, aw = answer.split(separator: " ").count
-        guard abs(ow - aw) <= 1 else { return nil }
-
-        // Never drop an elision mark, a diacritic or a ligature the book printed (Yüan, æ).
-        for mark in ["’", "'"] where original.components(separatedBy: mark).count > answer.components(separatedBy: mark).count {
-            return nil
-        }
-        guard Self.markedCount(answer) >= Self.markedCount(original) else { return nil }
-        // Numbers are never dropped or changed (note references, dates, page numbers).
-        guard original.filter(\.isNumber) == answer.filter(\.isNumber) else { return nil }
-        // OCR confuses case only for letters whose shapes match (c/C, o/O, s/S…).
-        let caseConfusable = Set("cosuvwxzCOSUVWXZ")
-        let oLetters = Array(original.filter(\.isLetter)), aLetters = Array(answer.filter(\.isLetter))
-        if oLetters.count == aLetters.count {
-            for (x, y) in zip(oLetters, aLetters) where x != y && x.lowercased() == y.lowercased() && !caseConfusable.contains(x) {
-                return nil
-            }
-        }
-        // Never split a word with a hyphen ("Setdements" → "Set-dements").
-        if answer.range(of: #"\p{L}-\p{L}"#, options: .regularExpression) != nil,
-           original.range(of: #"\p{L}-\p{L}"#, options: .regularExpression) == nil { return nil }
-        let letters = { (s: String) in s.filter(\.isLetter) }
-        if letters(original) == letters(answer) {
-            // Punctuation-only repairs: insert an apostrophe, hyphen → dash, swap a quote's
-            // style, rejoin a split word. Never delete marks or change their meaning.
-            return Self.isPunctuationRepair(original, answer) ? answer : nil
-        }
-        // The change must be something OCR does (tl→d, c→e), not a respelling: "ancle" →
-        // "ankle" modernizes Austen, "Peroz" → "Perez" invents a name.
-        guard Self.isOCRConfusion(original, answer) else { return nil }
-        // Capitalized words are mostly names; only fix them into a common word ("Tbe" → "The").
-        if original.first?.isUppercase == true, let lexicon = suspects?.lexicon {
-            guard !lexicon.isWord(original.lowercased()), lexicon.isWord(answer.lowercased()) else { return nil }
-        }
-
-        guard let lexicon = suspects?.lexicon else { return nil }
-        let words = { (s: String) in s.split(whereSeparator: { !$0.isLetter && $0 != "’" && $0 != "'" }).map(String.init) }
-        let originalIsWords = words(original).allSatisfy { lexicon.isWord($0) }
-        let answerIsWords = words(answer).allSatisfy { lexicon.isWord($0) }
-        return !originalIsWords && answerIsWords ? answer : nil
-    }
-
-    /// True if `a` and `b` differ only by the confusions OCR engines actually make:
-    /// c/e, i/l/1, 0/o, h/b, and the ligature-like rn→m, cl→d, tl→d ("Setdements" for
-    /// "Settlements"), li→h, vv→w. Letters are never simply added or dropped.
-    static func isOCRConfusion(_ a: String, _ b: String) -> Bool {
-        func canonical(_ s: String) -> String {
-            var t = s.lowercased()
-            for (from, to) in [("rn", "m"), ("cl", "d"), ("tl", "d"), ("li", "h"), ("vv", "w")] {
-                t = t.replacingOccurrences(of: from, with: to)
-            }
-            var out = ""
-            for c in t {
-                switch c {
-                case "c", "e": out.append("e")
-                case "i", "l", "1", "|", "!": out.append("l")
-                case "o", "0": out.append("o")
-                case "h", "b": out.append("h")
-                case "'", "’", "‘", "\"", "“", "”", "-", "—", " ", ".", ",":
-                    continue
-                default: out.append(c)
-                }
-            }
-            return out
-        }
-        return canonical(a) == canonical(b)
-    }
-
-    static func isPunctuationRepair(_ a: String, _ b: String) -> Bool {
-        let quotes = Set("\"'“”‘’")
-        func family(_ c: Character) -> Character {
-            if quotes.contains(c) { return "\"" }
-            if "-—–".contains(c) { return "-" }
-            return c
-        }
-        for (op, c) in diffOps(Array(a), Array(b)) {
-            switch op {
-            case .insert where c == "’" || c == "'": continue
-            case .delete where c == " ": continue           // "return d" → "return’d"
-            case .substitute(let from) where family(from) == family(c): continue
-            case .substitute(let from) where from == " " && (c == "’" || c == "'"): continue
-            default: return false
-            }
-        }
-        return true
-    }
-
-    enum DiffOp { case insert, delete, substitute(Character) }
-
-    /// Character edits turning `a` into `b` (keeps are omitted).
-    static func diffOps(_ a: [Character], _ b: [Character]) -> [(DiffOp, Character)] {
-        var out: [(DiffOp, Character)] = []
-        let ops = TextPatch.align(a, b)
-        var i = 0
-        for op in ops {
-            switch op {
-            case .keep: i += 1
-            case .substitute(let n): out.append((.substitute(a[i]), n)); i += 1
-            case .delete: out.append((.delete, a[i])); i += 1
-            case .insert(let n): out.append((.insert, n))
-            }
-        }
-        return out
-    }
-
-    /// Characters carrying a diacritic or ligature (é, ü, æ, œ).
-    static func markedCount(_ s: String) -> Int {
-        s.filter { c in String(c).decomposedStringWithCanonicalMapping.unicodeScalars.count > 1
-            || "æÆœŒøØ".contains(c) }.count
-    }
 
     /// The sentence containing `fragment`, trimmed to a reasonable length.
     static func sentence(around fragment: String, in text: String) -> String {

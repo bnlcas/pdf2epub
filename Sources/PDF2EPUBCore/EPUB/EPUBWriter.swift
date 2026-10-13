@@ -184,8 +184,8 @@ public enum EPUBWriter {
         return (data, EPUBStats(files: spine.count, largestFileBytes: largest, totalBytes: data.count))
     }
 
-    static let anchorPattern = try! NSRegularExpression(pattern: #"id="([nr]\d+-\d+)""#)
-    static let crossLinkPattern = try! NSRegularExpression(pattern: ##"<a href="#@([nr]\d+-\d+)"( id="[^"]*")?>(.*?)</a>"##)
+    static let anchorPattern = try! NSRegularExpression(pattern: #"id="([nr]\d+-\d+|toc-\d+)""#)
+    static let crossLinkPattern = try! NSRegularExpression(pattern: ##"<a href="#@([nr]\d+-\d+|toc-\d+)"( id="[^"]*")?>(.*?)</a>"##)
 
     static func locateAnchors(_ files: [RenderedFile]) -> [String: String] {
         var out: [String: String] = [:]

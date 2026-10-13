@@ -37,3 +37,6 @@ Packages/
 
 # Local test books (often copyrighted): never commit
 /TestCorpus/
+
+# Conversion outputs written next to test inputs
+Tests/**/*.epub

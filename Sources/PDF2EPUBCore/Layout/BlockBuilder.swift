@@ -146,6 +146,11 @@ public enum BlockBuilder {
             for (a, b) in zip(region, region.dropFirst()) {
                 var split = false
                 if TOCEntry.hasLeader(a.text) { split = true }
+                // A short line that doesn't end a sentence can't be the end of a paragraph:
+                // it's a run-in heading ("Poetry") or a deliberate line break.
+                if Double(a.bbox.width) < 0.4 * geom.width, !TextMetrics.endsSentence(a.text),
+                   !a.plainText.hasSuffix(","), !a.plainText.hasSuffix(";"), !a.plainText.hasSuffix("-"),
+                   TextMetrics.firstLetter(b.text)?.isUppercase == true { split = true }
                 // A short all-caps line over the text is a section head ("HORSES", "WAR PRISONERS").
                 if Self.isShortCapsLine(a) && !Self.isShortCapsLine(b) { split = true }
                 // Stacked headings: "3. Method" then "3.1. Setup", or a short bold line.

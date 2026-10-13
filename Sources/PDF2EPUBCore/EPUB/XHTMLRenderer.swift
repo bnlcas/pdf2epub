@@ -53,7 +53,8 @@ public enum XHTMLRenderer {
                 if InlineStyle.isEntirely(text, on: InlineStyle.boldOn, off: InlineStyle.boldOff) {
                     text.removeAll { $0 == InlineStyle.boldOn || $0 == InlineStyle.boldOff }
                 }
-                html = "<h\(lv)>\(inline(text, refs: b.noteRefs ?? [:], endnotes: b.endnoteRefs ?? [:]))</h\(lv)>\n"
+                let idAttr = b.anchorID.map { " id=\"\($0)\"" } ?? ""
+                html = "<h\(lv)\(idAttr)>\(inline(text, refs: b.noteRefs ?? [:], endnotes: b.endnoteRefs ?? [:]))</h\(lv)>\n"
                 afterBreak = true
             case .paragraph where b.endnoteAnchor != nil, .unknown where b.endnoteAnchor != nil:
                 // An endnote: its number links back to the reference in the text.
@@ -74,13 +75,25 @@ public enum XHTMLRenderer {
                 html = "<div class=\"stanza\">\(inline(b.text, refs: b.noteRefs ?? [:], endnotes: b.endnoteRefs ?? [:]))</div>\n"
                 afterBreak = true
             case .listItem:
+                // Consecutive items of the same kind: numbered → <ol>, otherwise <ul>.
                 var items: [String] = []
                 var j = i
-                while j < blocks.count, blocks[j].kind == .listItem {
-                    items.append("<li>\(inline(blocks[j].text, refs: blocks[j].noteRefs ?? [:], endnotes: blocks[j].endnoteRefs ?? [:]))</li>")
+                let ordered = b.listOrdinal != nil
+                while j < blocks.count, blocks[j].kind == .listItem, (blocks[j].listOrdinal != nil) == ordered {
+                    let link = blocks[j].linkTarget.map { "<a href=\"#@\($0)\">" }
+                    let body = inline(blocks[j].text, refs: blocks[j].noteRefs ?? [:], endnotes: blocks[j].endnoteRefs ?? [:])
+                    items.append("<li>\(link.map { $0 + body + "</a>" } ?? body)</li>")
                     j += 1
                 }
-                html = "<ul>\n" + items.joined(separator: "\n") + "\n</ul>\n"
+                if ordered {
+                    let start = b.listOrdinal ?? 1
+                    let type = b.listLettered == true ? " type=\"a\"" : ""
+                    let startAttr = start != 1 ? " start=\"\(start)\"" : ""
+                    html = "<ol\(type)\(startAttr)>\n" + items.joined(separator: "\n") + "\n</ol>\n"
+                } else {
+                    let cls = b.flags.contains(.tocEntry) ? " class=\"toc\"" : ""
+                    html = "<ul\(cls)>\n" + items.joined(separator: "\n") + "\n</ul>\n"
+                }
                 consumed = j - i
                 afterBreak = true
             case .figure:

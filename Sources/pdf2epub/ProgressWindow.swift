@@ -51,12 +51,22 @@ final class ProgressWindow: NSObject {
     /// Maps pipeline stages onto one bar: reading pages is most of the work.
     func update(stage: String, current: Int, total: Int) {
         let fraction = total > 0 ? Double(current) / Double(total) : 0
+        // Shares of the bar, roughly by time on a long scanned book.
         switch stage {
         case "page":
-            bar.doubleValue = 0.85 * fraction
+            bar.doubleValue = 0.30 * fraction
             status.stringValue = "Reading page \(current) of \(total)"
+        case "figures":
+            bar.doubleValue = 0.30 + 0.15 * fraction
+            status.stringValue = "Finding illustrations (page \(current) of \(total))"
+        case "layout":
+            bar.doubleValue = 0.45 + 0.10 * fraction
+            status.stringValue = "Laying out page \(current) of \(total)"
+        case "preparing":
+            bar.doubleValue = 0.55 + 0.05 * fraction
+            status.stringValue = "Checking spelling"
         case "cleanup":
-            bar.doubleValue = 0.85 + 0.12 * fraction
+            bar.doubleValue = 0.60 + 0.37 * fraction
             status.stringValue = "Proofreading (\(current) of \(total))"
         case "writing":
             bar.doubleValue = 0.97

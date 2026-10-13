@@ -44,6 +44,8 @@ public struct Profile: Sendable {
         img{max-width:100%}
         figcaption,p.caption{font-size:0.9em;font-style:italic;text-align:center;text-indent:0;margin:0.3em 0 0.8em}
         ul,ol{margin:0.5em 0 0.5em 1.2em}
+        ul.toc{list-style:none;margin-left:0}
+        ul.toc li{margin-bottom:0.5em}
         li{text-indent:0}
         hr{margin:1em 25%}
         div.notes{margin-top:1.5em;font-size:0.85em}
@@ -79,6 +81,8 @@ public struct Profile: Sendable {
         img{max-width:100%}
         figcaption,p.caption{font-size:0.9em;font-style:italic;text-align:center;text-indent:0;margin:0.4em 0 1em}
         ul,ol{margin:0.6em 0 0.6em 1.5em}
+        ul.toc{list-style:none;margin-left:0}
+        ul.toc li{margin-bottom:0.6em}
         li{text-indent:0;margin-bottom:0.2em}
         hr{margin:1.2em 25%}
         div.notes{margin-top:2em;font-size:0.88em}

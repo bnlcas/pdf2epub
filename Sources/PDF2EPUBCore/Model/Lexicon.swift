@@ -66,9 +66,13 @@ public final class Lexicon: @unchecked Sendable {
     /// The spell checker's suggested corrections for a misspelled word.
     public func guesses(_ word: String) -> [String] {
         lock.lock(); defer { lock.unlock() }
-        return NSSpellChecker.shared.guesses(forWordRange: NSRange(location: 0, length: (word as NSString).length),
-                                             in: word, language: language, inSpellDocumentWithTag: 0) ?? []
+        if let hit = guessCache[word] { return hit }
+        let g = NSSpellChecker.shared.guesses(forWordRange: NSRange(location: 0, length: (word as NSString).length),
+                                              in: word, language: language, inSpellDocumentWithTag: 0) ?? []
+        guessCache[word] = g
+        return g
     }
+    private var guessCache: [String: [String]] = [:]
 
     /// Fraction of word-like tokens that are dictionary words. Tokens mixing letters with
     /// digits or junk symbols count as failures; pure numbers and punctuation are ignored.

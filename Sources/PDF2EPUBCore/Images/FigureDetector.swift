@@ -10,9 +10,10 @@ import CoreGraphics
 public enum FigureDetector {
     static let inkDPI = 50.0
 
-    public static func detect(pages: inout [PageLines], doc: PDFDocument, context: LayoutContext) -> [FigureRegion] {
+    public static func detect(pages: inout [PageLines], doc: PDFDocument, context: LayoutContext, log: Log? = nil) -> [FigureRegion] {
         var out: [FigureRegion] = []
         for p in pages.indices {
+            log?.progress("figures", p + 1, pages.count)
             guard let page = doc.page(at: pages[p].index) else { continue }
             var rects = pages[p].figureRects.filter { r in
                 let area = Double(r.width * r.height)

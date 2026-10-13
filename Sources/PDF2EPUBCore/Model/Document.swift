@@ -125,6 +125,14 @@ public struct Block: Codable, Sendable {
     public var endnoteRefs: [String: String]?
     /// For an endnote in a Notes chapter: its id, shared with the reference that cites it.
     public var endnoteAnchor: String?
+    /// For an item of a numbered list: its number (the list renders as <ol>).
+    public var listOrdinal: Int?
+    /// The numbered list counts with letters (a, b, c).
+    public var listLettered: Bool?
+    /// An id other parts of the book link to (a chapter's opening heading).
+    public var anchorID: String?
+    /// A link target inside the book, resolved when the EPUB is written ("#@toc-3").
+    public var linkTarget: String?
     public var source: TextSource
     /// Source lines, kept for heuristics. Not serialized into the EPUB.
     public var lines: [Line]

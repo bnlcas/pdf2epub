@@ -79,6 +79,7 @@ public final class Pipeline {
         if let t = options.title { metadata.title = t }
         if let a = options.author { metadata.author = a }
         var outline = PDFIngest.outline(doc)
+        var printedContents = PrintedContents.Parsed()
 
         // Language first: it drives the dictionary used to judge text layers.
         lexicon.detectLanguage(from: sampleText(doc))
@@ -136,13 +137,15 @@ public final class Pipeline {
             if let range = PrintedContents.candidatePages(pages, pageCount: doc.pageCount) {
                 extra = await contentsPageNumbers(doc, pages: Array(pages[range]))
             }
-            outline = PrintedContents.entries(pages: pages, folios: FolioMap(pages: pages), pageCount: doc.pageCount,
-                                              extraNumbers: extra)
+            printedContents = PrintedContents.parse(pages: pages, folios: FolioMap(pages: pages), pageCount: doc.pageCount,
+                                                    extraNumbers: extra)
+            outline = printedContents.entries
+            log.debug("printed contents: \(printedContents.items.count) entries, \(printedContents.entries.count) placed as chapters")
             if !outline.isEmpty { log.debug("chapters from the printed contents: \(outline.map(\.title).joined(separator: " | "))") }
         }
         var figures: [FigureRegion] = []
         if options.profile.maxImageWidth > 0 {
-            figures = FigureDetector.detect(pages: &pages, doc: doc, context: context)
+            figures = FigureDetector.detect(pages: &pages, doc: doc, context: context, log: log)
         }
         lap("margins+figures")
         // OCR'd text (by Vision, or a scanner's hidden layer) gets checked for misreadings.
@@ -150,7 +153,8 @@ public final class Pipeline {
         let suspicious = OCRSuspects(lexicon: lexicon, lines: pages.filter(ocrLike).flatMap(\.lines))
         let ocrLikePages = Set(pages.filter(ocrLike).map(\.index))
         var blocks: [Block] = []
-        for page in pages {
+        for (n, page) in pages.enumerated() {
+            log.progress("layout", n + 1, pages.count)
             var pageBlocks = BlockBuilder.build(page: page, context: context)
             for i in pageBlocks.indices where ocrLikePages.contains(pageBlocks[i].page) {
                 let split = suspicious.splitRunTogetherWords(pageBlocks[i].plainText)
@@ -172,6 +176,12 @@ public final class Pipeline {
             blocks[i].flags.insert(.ambiguousKind)
         }
         lap("classify")
+        if !printedContents.items.isEmpty {
+            Self.rebuildContentsPage(&blocks, contents: printedContents)
+            for i in blocks.indices where blocks[i].flags.contains(.tocEntry) && suspicious.hasSuspectWords(blocks[i].plainText) {
+                blocks[i].flags.insert(.lowConfidence)
+            }
+        }
         FlowJoiner.markContinuations(&blocks)
         try dump("blocks-heuristic", blocks)
 
@@ -186,7 +196,13 @@ public final class Pipeline {
             metadata.title = input.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "_", with: " ")
         }
 
-        // 4. Language-model cleanup.
+        // 4. Dictionary-certain OCR fixes (no model needed), then language-model cleanup.
+        let fixer = OCRFixer(suspects: suspicious)
+        let autoFixed = fixer.applyCertainFixes(&blocks, log: log)
+        if autoFixed > 0 { log.debug("cleanup: \(autoFixed) unambiguous OCR fix(es) from the dictionary") }
+        if let dir = options.keepIntermediate, !fixer.applied.isEmpty {
+            try? fixer.applied.joined(separator: "\n").write(to: dir.appendingPathComponent("dictionary-fixes.txt"), atomically: true, encoding: .utf8)
+        }
         if let cleaner {
             if let llm = cleaner as? LLMCleaner {
                 llm.suspects = suspicious
@@ -273,6 +289,28 @@ public final class Pipeline {
             log.warn("low-confidence OCR on \(lowConfidence.count) page(s): \(lowConfidence.prefix(10).map { String($0.index + 1) }.joined(separator: ", "))")
         }
         return (pages.compactMap { $0 }, infos.compactMap { $0 })
+    }
+
+    /// Replaces the jumbled blocks of a printed contents page with a clean list: repaired
+    /// numerals ("III", not "HI"), each entry linked to its chapter, its section list below.
+    static func rebuildContentsPage(_ blocks: inout [Block], contents: PrintedContents.Parsed) {
+        guard let first = blocks.firstIndex(where: { contents.pages.contains($0.page) && !$0.kind.isHeading }) else { return }
+        let page = blocks[first].page
+        var items: [Block] = []
+        for item in contents.items {
+            var text = item.numeral.map { "\(InlineStyle.boldOn)\($0)\(InlineStyle.boldOff)  " } ?? ""
+            text += item.title
+            if let d = item.description { text += "\n" + InlineStyle.wrap(d, italic: true) }
+            var b = Block(page: page, bbox: .zero, kind: .listItem, text: text)
+            b.flags.insert(.tocEntry)
+            b.linkTarget = item.entry.map { "toc-\($0)" }
+            items.append(b)
+        }
+        // Keep the "Contents" heading; everything else on those pages is the old listing.
+        blocks.removeAll { contents.pages.contains($0.page) && !($0.kind.isHeading && PrintedContents.isContentsTitle($0.plainText)) }
+        let at = min(first, blocks.count)
+        let insertAt = blocks[..<at].lastIndex { PrintedContents.isContentsTitle($0.plainText) }.map { $0 + 1 } ?? at
+        blocks.insert(contentsOf: items, at: insertAt)
     }
 
     /// OCR the contents pages that came from a text layer and keep just the bare numbers in

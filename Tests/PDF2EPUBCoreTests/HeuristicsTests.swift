@@ -219,7 +219,7 @@ func context(_ hyphenated: Set<String> = [], words: Set<String> = []) -> LayoutC
     }
 
     @Test func rejectsModernization() {
-        let cleaner = LLMCleaner(model: .default, suspects: suspects)
+        let cleaner = OCRFixer(suspects: suspects)
         #expect(cleaner.validFix(original: "unnumber’d", answer: "unnumbered") == nil)
         #expect(cleaner.validFix(original: "favouring", answer: "favoring") == nil)
         #expect(cleaner.validFix(original: "Clytæmnestra’s", answer: "Clytemnestra’s") == nil)
@@ -283,5 +283,53 @@ func context(_ hyphenated: Set<String> = [], words: Set<String> = []) -> LayoutC
         #expect(MetadataGuesser.titleCase("THE GOLDEN PEACHES OF SAMARKAND") == "The Golden Peaches of Samarkand")
         #expect(MetadataGuesser.titleCase("EDWARD H. SCHAFER") == "Edward H. Schafer")
         #expect(MetadataGuesser.titleCase("Pride and Prejudice") == "Pride and Prejudice")
+    }
+}
+
+@Suite struct ContentsAndListsTests {
+    @Test func romanNumeralsAsOCRReadsThem() {
+        #expect(PrintedContents.romanValue("HI") == 3)
+        #expect(PrintedContents.romanValue("vi") == 6)
+        #expect(PrintedContents.romanValue("ix") == 9)
+        #expect(PrintedContents.romanValue("Il") == 2)
+        #expect(PrintedContents.romanValue("XL") == 40)
+        #expect(PrintedContents.romanValue("Men") == nil)
+        #expect(PrintedContents.roman(14) == "XIV")
+        #expect(PrintedContents.splitNumeral("HI Domestic Animals").numeral == "HI")
+        #expect(PrintedContents.splitNumeral("v i Furs and Feathers").title == "Furs and Feathers")
+    }
+
+    @Test func folioMapSkipsStrayNumbersAndRespectsGaps() {
+        func page(_ i: Int, _ folio: String?) -> PageLines {
+            var p = PageLines(index: i, size: .zero, source: .textLayer, lines: [])
+            if let folio { p.furniture = [(Line(text: folio, bbox: .zero, fontSize: 9), .pageNumber)] }
+            return p
+        }
+        // Pages 10–20 print 1–11, except a stray "1644" on page 5 and a plate at 15.
+        var pages = (0..<25).map { page($0, nil) }
+        pages[5] = page(5, "1644")
+        for i in 10...20 where i != 15 { pages[i] = page(i, String(i < 15 ? i - 9 : i - 10)) }
+        let map = FolioMap(pages: pages)
+        #expect(!map.folios.contains { $0.number == 1644 })
+        #expect(map.index(ofPrinted: 3) == 12)
+        #expect(map.index(ofPrinted: 7) == 17)     // after the unnumbered plate
+    }
+
+    @Test func numberedParagraphsBecomeAnOrderedList() {
+        var blocks = ["Some intro text that runs on.", "1. Gather the pages.", "2. Read the text layer.", "3. Write the book.", "After the list."]
+            .map { Block(page: 0, bbox: .zero, kind: .paragraph, text: $0) }
+        BlockClassifier.markNumberedLists(&blocks)
+        #expect(blocks.map(\.kind) == [.paragraph, .listItem, .listItem, .listItem, .paragraph])
+        #expect(blocks[2].listOrdinal == 2)
+        #expect(blocks[2].text == "Read the text layer.")
+    }
+
+    @Test func runInHeading() {
+        let line = Line(text: "Poetry", bbox: CGRect(x: 0.2, y: 0.1, width: 0.05, height: 0.02), fontSize: 10)
+        let heading = Block(page: 0, bbox: line.bbox, kind: .paragraph, text: "Poetry", lines: [line])
+        let body = Block(page: 0, bbox: .zero, kind: .paragraph, text: String(repeating: "In translations of poems I have preferred faithfulness. ", count: 3))
+        #expect(BlockClassifier.isRunInHeading(heading, next: body))
+        let signoff = Block(page: 0, bbox: line.bbox, kind: .paragraph, text: "Berkeley, California", lines: [line])
+        #expect(!BlockClassifier.isRunInHeading(signoff, next: body))
     }
 }

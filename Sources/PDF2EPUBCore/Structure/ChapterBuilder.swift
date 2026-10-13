@@ -36,6 +36,10 @@ public enum ChapterBuilder {
                 chapterBlocks.insert(Block(page: first.page, bbox: .zero, kind: .heading(1), text: s.title, source: first.source), at: 0)
             }
             normalizeHeadings(&chapterBlocks, title: s.title)
+            // The printed contents page links here.
+            if let anchor = s.anchor, let h = chapterBlocks.firstIndex(where: { $0.kind.headingLevel == 1 }) {
+                chapterBlocks[h].anchorID = anchor
+            }
             chapters.append(Chapter(title: s.title, navLevel: s.level, blocks: chapterBlocks))
         }
         if chapters.isEmpty {
@@ -72,7 +76,7 @@ public enum ChapterBuilder {
         return chapters
     }
 
-    struct Split { var index: Int; var title: String; var level: Int; var synthesizeHeading = false }
+    struct Split { var index: Int; var title: String; var level: Int; var synthesizeHeading = false; var anchor: String? = nil }
 
     // MARK: - Outline
 
@@ -89,10 +93,11 @@ public enum ChapterBuilder {
         }
         var splits: [Split] = []
         var used = Set<Int>()
-        for e in entries where e.level <= chosen {
+        for (k, e) in entries.enumerated() where e.level <= chosen {
             guard let idx = blockIndex(for: e, in: blocks), !used.contains(idx) else { continue }
             used.insert(idx)
-            splits.append(Split(index: idx, title: cleanTitle(e.title), level: e.level, synthesizeHeading: e.fromPrintedContents))
+            splits.append(Split(index: idx, title: cleanTitle(e.title), level: e.level, synthesizeHeading: e.fromPrintedContents,
+                                anchor: e.fromPrintedContents ? "toc-\(k)" : nil))
         }
         return splits
     }
