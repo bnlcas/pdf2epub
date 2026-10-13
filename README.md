@@ -38,8 +38,9 @@ Good to know:
   and in the *Services* menu.
 - The installer also adds the `pdf2epub` command for Terminal users. See [Usage](#usage) for
   its options.
-- **Uninstall:** delete `/usr/local/bin/pdf2epub`, `/Library/Application Support/PDF to EPUB`,
-  and `~/Library/Services/Convert to EPUB.workflow`.
+- **Uninstall:** run `Scripts/uninstall.sh` (also handy to clean up before reinstalling).
+  It removes `/usr/local/bin/pdf2epub`, `~/bin/pdf2epub`, `/Library/Application Support/PDF
+  to EPUB`, `~/Library/Services/Convert to EPUB.workflow`, and the installer's receipt.
 
 ## Build from source
 

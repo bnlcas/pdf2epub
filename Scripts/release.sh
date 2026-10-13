@@ -66,10 +66,10 @@ pkgbuild --root "$root" --identifier "$BUNDLE_ID" --version "$VERSION" \
 
 cp LICENSE "$work/resources/LICENSE.txt"
 cat > "$work/resources/welcome.html" <<'HTML'
-<html><body style="font-family: -apple-system; font-size: 13px">
+<html><head><meta charset="utf-8"/></head><body style="font-family: -apple-system; font-size: 13px">
 <p><b>PDF to EPUB</b> turns PDF books into ebooks that read well on e-readers.</p>
 <p>After installing, right-click any PDF in Finder and choose
-<b>Quick Actions → Convert to EPUB</b>. The book appears next to the PDF, and a
+<b>Quick Actions &rarr; Convert to EPUB</b>. The book appears next to the PDF, and a
 notification tells you when it's done. Big scanned books can take a few minutes.</p>
 <p>Requires macOS 26 or later on an Apple Silicon Mac. With Apple Intelligence turned on,
 conversions also get an on-device proofreading pass.</p>

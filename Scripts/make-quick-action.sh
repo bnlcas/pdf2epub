@@ -15,8 +15,15 @@ mkdir -p "$wf/Contents"
 # The shell script the action runs. Kept free of characters that need XML escaping
 # other than & < > (escaped below).
 read -r -d '' SCRIPT <<'SH' || true
+# Use an installed pdf2epub that has the progress window; an older copy elsewhere
+# (say, from a previous install) would reject the flag.
+FLAGS=""
 for dir in "$HOME/bin" /usr/local/bin /opt/homebrew/bin; do
-  [ -x "$dir/pdf2epub" ] && PDF2EPUB="$dir/pdf2epub" && break
+  [ -x "$dir/pdf2epub" ] || continue
+  if "$dir/pdf2epub" --help 2>/dev/null | grep -q "Show a progress window"; then
+    PDF2EPUB="$dir/pdf2epub"; FLAGS="--progress-window"; break
+  fi
+  [ -z "${PDF2EPUB:-}" ] && PDF2EPUB="$dir/pdf2epub"
 done
 notify() {
   /usr/bin/osascript - "$1" "$2" <<'OSA'
@@ -31,7 +38,7 @@ if [ -z "${PDF2EPUB:-}" ]; then
 fi
 for f in "$@"; do
   name="$(basename "$f")"
-  log="$("$PDF2EPUB" --progress-window "$f" 2>&1)"
+  log="$("$PDF2EPUB" $FLAGS "$f" 2>&1)"
   status=$?
   if [ $status -eq 0 ]; then
     notify "PDF to EPUB" "Done: ${name%.*}.epub"

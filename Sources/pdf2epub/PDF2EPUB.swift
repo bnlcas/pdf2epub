@@ -11,7 +11,7 @@ struct PDF2EPUB: AsyncParsableCommand {
         discussion: """
         Exit status: 0 on success, 1 on failure, 2 on success with warnings.
         """,
-        version: "1.1.0")
+        version: "1.1.1")
 
     @Argument(help: "The PDF to convert.", completion: .file(extensions: ["pdf"]))
     var input: String
